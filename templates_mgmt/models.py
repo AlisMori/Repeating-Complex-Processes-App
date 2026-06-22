@@ -1,9 +1,8 @@
 from django.conf import settings
 from django.db import models
+# This model stores reusable process templates
 
-
-# This model stores reusable process templates.
-# Template is the main blueprint that later can be used to create cycle instances.
+# Template is the main blueprint that later can be used to create cycle instances
 class Template(models.Model):
     template_id = models.AutoField(primary_key=True)
 
@@ -27,8 +26,8 @@ class Template(models.Model):
         return self.template_name
 
 
-# This association model connects users and templates.
-# It supports access types such as owner, saved, or shared.
+# This association model connects users and templates
+# It supports access types such as owner, saved or shared
 class UserTemplate(models.Model):
     ACCESS_TYPE_CHOICES = [
         ("owner", "Owner"),
@@ -46,7 +45,7 @@ class UserTemplate(models.Model):
         return f"{self.user} - {self.template} ({self.access_type})"
 
 
-# Tags are used to categorise template tasks and activities.
+# Tags are used to categorise template tasks and activities
 class Tag(models.Model):
     tag_id = models.AutoField(primary_key=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -56,7 +55,7 @@ class Tag(models.Model):
         return self.tag_name
 
 
-# TemplateTask stores reusable actionable tasks inside a template.
+# TemplateTask stores reusable actionable tasks inside a template
 class TemplateTask(models.Model):
     template_task_id = models.AutoField(primary_key=True)
     template = models.ForeignKey(
@@ -78,7 +77,7 @@ class TemplateTask(models.Model):
         return self.task_name
 
 
-# TemplateActivity stores non-actionable timeline activities inside a template.
+# TemplateActivity stores non-actionable timeline activities inside a template
 class TemplateActivity(models.Model):
     template_activity_id = models.AutoField(primary_key=True)
     template = models.ForeignKey(
@@ -97,7 +96,7 @@ class TemplateActivity(models.Model):
         return self.activity_name
 
 
-# This association model allows one task to have multiple tags.
+# This association model allows one task to have multiple tags
 class TemplateTaskTag(models.Model):
     template_task_tag_id = models.AutoField(primary_key=True)
     template_task = models.ForeignKey(TemplateTask, on_delete=models.CASCADE)
@@ -107,7 +106,7 @@ class TemplateTaskTag(models.Model):
         return f"{self.template_task} - {self.tag}"
 
 
-# This association model allows one activity to have multiple tags.
+# This association model allows one activity to have multiple tags
 class TemplateActivityTag(models.Model):
     template_activity_tag_id = models.AutoField(primary_key=True)
     template_activity = models.ForeignKey(TemplateActivity, on_delete=models.CASCADE)
