@@ -15,6 +15,8 @@ class UserSerializer(serializers.ModelSerializer):
             "email",
             "first_name",
             "last_name",
+            "notification_opt_in",
+            "created_at",
         ]
 
 
@@ -33,6 +35,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             "email",
             "first_name",
             "last_name",
+            "notification_opt_in",
             "password",
         ]
 
