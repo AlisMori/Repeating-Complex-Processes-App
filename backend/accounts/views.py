@@ -1,10 +1,24 @@
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate
 from django.contrib.auth.forms import PasswordResetForm
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
-from .serializers import LoginSerializer, RegisterSerializer, UserSerializer
+from .serializers import (
+    LoginSerializer,
+    PasswordResetConfirmSerializer,
+    RegisterSerializer,
+    UserSerializer,
+)
+
+
+def build_token_payload(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+    }
 
 
 class RegisterView(APIView):
@@ -15,12 +29,12 @@ class RegisterView(APIView):
 
         if serializer.is_valid():
             user = serializer.save()
-            login(request, user)
 
             return Response(
                 {
                     "message": "Account created successfully.",
                     "user": UserSerializer(user).data,
+                    "tokens": build_token_payload(user),
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -52,12 +66,11 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        login(request, user)
-
         return Response(
             {
                 "message": "Logged in successfully.",
                 "user": UserSerializer(user).data,
+                "tokens": build_token_payload(user),
             },
             status=status.HTTP_200_OK,
         )
@@ -67,7 +80,22 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        logout(request)
+        refresh_token = request.data.get("refresh")
+
+        if not refresh_token:
+            return Response(
+                {"refresh": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+        except Exception:
+            return Response(
+                {"refresh": ["Invalid refresh token."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response(
             {"message": "Logged out successfully."},
@@ -112,5 +140,38 @@ class PasswordResetView(APIView):
             {
                 "message": "If an account with that email exists, a password reset email has been sent."
             },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, uidb64=None, token=None):
+        return Response(
+            {
+                "uid": uidb64,
+                "token": token,
+                "detail": "Submit this uid and token to POST /api/auth/password-reset/confirm/ with a new password.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, uidb64=None, token=None):
+        payload = request.data.copy()
+        if uidb64 and "uid" not in payload:
+            payload["uid"] = uidb64
+        if token and "token" not in payload:
+            payload["token"] = token
+
+        serializer = PasswordResetConfirmSerializer(data=payload)
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+
+        return Response(
+            {"message": "Password has been reset successfully."},
             status=status.HTTP_200_OK,
         )
