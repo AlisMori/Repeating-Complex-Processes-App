@@ -1,14 +1,16 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
-from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from .forms import SafeMessageIdPasswordResetForm
 
 
 User = get_user_model()
@@ -99,17 +101,22 @@ class LoginSerializer(serializers.Serializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     uid = serializers.CharField()
     token = serializers.CharField()
-    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    new_password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
         try:
             user_id = force_str(urlsafe_base64_decode(attrs["uid"]))
             user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        except (TypeError, ValueError, OverflowError, UnicodeDecodeError, User.DoesNotExist):
             raise serializers.ValidationError({"uid": ["Invalid reset link."]})
 
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError({"token": ["Invalid or expired reset token."]})
+
+        try:
+            validate_password(attrs["new_password"], user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"new_password": list(exc.messages)})
 
         attrs["user"] = user
         return attrs
@@ -126,11 +133,12 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
     def save(self):
         request = self.context.get("request")
-        form = PasswordResetForm(data={"email": self.validated_data["email"]})
+        django_request = getattr(request, "_request", request)
+        form = SafeMessageIdPasswordResetForm(data={"email": self.validated_data["email"]})
         form.full_clean()
         form.save(
-            request=request,
-            use_https=request.is_secure() if request is not None else False,
+            request=django_request,
+            use_https=django_request.is_secure() if django_request is not None else False,
             from_email=settings.DEFAULT_FROM_EMAIL,
             email_template_name="registration/password_reset_email.html",
             subject_template_name="registration/password_reset_subject.txt",

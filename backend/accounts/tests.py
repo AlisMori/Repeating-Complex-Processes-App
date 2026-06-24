@@ -270,8 +270,51 @@ class AuthApiTests(APITestCase):
     def test_password_reset_confirm_changes_password(self):
         uid = urlsafe_base64_encode(str(self.user.pk).encode())
         token = default_token_generator.make_token(self.user)
+        new_password = "EvenStronger123!"
 
         response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": new_password,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(new_password))
+
+    def test_password_reset_confirm_allows_login_with_new_password(self):
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        token = default_token_generator.make_token(self.user)
+        new_password = "EvenStronger123!"
+
+        reset_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": new_password,
+            },
+            format="json",
+        )
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": new_password},
+            format="json",
+        )
+
+        self.assertEqual(reset_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", login_response.data)
+
+    def test_password_reset_confirm_rejects_old_password_after_change(self):
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        token = default_token_generator.make_token(self.user)
+
+        reset_response = self.client.post(
             reverse("auth-password-reset-confirm"),
             {
                 "uid": uid,
@@ -280,10 +323,84 @@ class AuthApiTests(APITestCase):
             },
             format="json",
         )
+        old_password_login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.user.refresh_from_db()
-        self.assertTrue(self.user.check_password("EvenStronger123!"))
+        self.assertEqual(reset_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            old_password_login_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(
+            old_password_login_response.data["detail"],
+            "Invalid username or password.",
+        )
+
+    def test_password_reset_confirm_reused_token_fails(self):
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        token = default_token_generator.make_token(self.user)
+
+        first_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+        second_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "AnotherStrong123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            second_response.data["token"],
+            ["Invalid or expired reset token."],
+        )
+
+    def test_password_reset_confirm_invalid_token_fails(self):
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": "invalid-token",
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], ["Invalid or expired reset token."])
+
+    def test_password_reset_confirm_weak_password_fails(self):
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        token = default_token_generator.make_token(self.user)
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
 
     def test_password_reset_request_sends_email(self):
         response = self.client.post(
@@ -356,10 +473,7 @@ class AuthApiTests(APITestCase):
 
         self.assertIn(expected_uid, email.body)
         self.assertIn(
-            reverse(
-                "password_reset_confirm",
-                kwargs={"uidb64": expected_uid, "token": "set-password"},
-            ).replace("set-password", ""),
+            f"/api/auth/password-reset/confirm/{expected_uid}/",
             email.body,
         )
 
