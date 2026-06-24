@@ -96,6 +96,15 @@ class TemplateApiAuthTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_private_template_list_does_not_include_other_users_private_template(self):
+        self.authenticate()
+
+        response = self.client.get(reverse("templates-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["template_id"] for item in response.data}
+        self.assertNotIn(self.hidden_template.template_id, returned_ids)
+
     def test_template_tasks_create_rejects_non_owner_parent_template(self):
         self.authenticate()
 
@@ -109,7 +118,27 @@ class TemplateApiAuthTests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_private_template_update_returns_404_for_other_users(self):
+        self.authenticate()
+
+        response = self.client.patch(
+            reverse("templates-detail", args=[self.hidden_template.template_id]),
+            {"template_name": "Nope"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_private_template_delete_returns_404_for_other_users(self):
+        self.authenticate()
+
+        response = self.client.delete(
+            reverse("templates-detail", args=[self.hidden_template.template_id])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_shared_template_detail_is_accessible(self):
         self.authenticate()
@@ -139,3 +168,27 @@ class TemplateApiAuthTests(APITestCase):
                 access_type="owner",
             ).exists()
         )
+
+    def test_template_create_ignores_client_submitted_user(self):
+        self.authenticate()
+
+        response = self.client.post(
+            reverse("templates-list"),
+            {"template_name": "Escalation Attempt", "user": self.other_user.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created_template = Template.objects.get(template_id=response.data["template_id"])
+        self.assertEqual(created_template.user_id, self.user.id)
+
+    def test_non_owner_cannot_share_public_template(self):
+        self.authenticate()
+
+        response = self.client.post(
+            reverse("templates-share", args=[self.public_template.template_id]),
+            {"user_id": self.user.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

@@ -30,6 +30,13 @@ def editable_templates_q(user):
     )
 
 
+def owned_cycles_q(user):
+    if not user or not user.is_authenticated:
+        return Q(pk__in=[])
+
+    return Q(user=user)
+
+
 def user_can_access_template(user, template):
     if not user or not user.is_authenticated:
         return False
@@ -56,6 +63,15 @@ def user_can_edit_template(user, template):
         template=template,
         access_type=TEMPLATE_OWNER_ACCESS_TYPE,
     ).exists()
+
+
+def user_can_access_cycle(user, cycle):
+    return bool(
+        user
+        and user.is_authenticated
+        and cycle is not None
+        and cycle.user_id == user.id
+    )
 
 
 def _resolve_template(obj):
@@ -124,7 +140,7 @@ class IsCycleOwner(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         cycle = _resolve_cycle(obj)
-        return cycle is not None and cycle.user_id == request.user.id
+        return user_can_access_cycle(request.user, cycle)
 
 
 class IsParentCycleOwner(BasePermission):
@@ -132,4 +148,4 @@ class IsParentCycleOwner(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         cycle = _resolve_cycle(obj)
-        return cycle is not None and cycle.user_id == request.user.id
+        return user_can_access_cycle(request.user, cycle)

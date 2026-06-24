@@ -89,6 +89,18 @@ class MeView(APIView):
             status=status.HTTP_200_OK,
         )
 
+    def patch(self, request):
+        serializer = UserSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class PasswordResetView(APIView):
     permission_classes = [permissions.AllowAny]
