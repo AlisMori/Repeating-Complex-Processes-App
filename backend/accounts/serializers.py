@@ -24,6 +24,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(required=True)
+    email = serializers.EmailField(required=True)
     password = serializers.CharField(
         write_only=True,
         required=True,
@@ -42,14 +44,19 @@ class RegisterSerializer(serializers.ModelSerializer):
             "password",
         ]
 
+    def validate_username(self, value):
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("A user with that username already exists.")
+        return value
+
+    def validate_email(self, value):
+        normalized_email = value.strip().lower()
+        if User.objects.filter(email__iexact=normalized_email).exists():
+            raise serializers.ValidationError("A user with that email already exists.")
+        return normalized_email
+
     def create(self, validated_data):
-        password = validated_data.pop("password")
-
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-
-        return user
+        return User.objects.create_user(**validated_data)
 
 
 class LoginSerializer(serializers.Serializer):

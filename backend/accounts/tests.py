@@ -23,6 +23,55 @@ class AuthApiTests(APITestCase):
             password="StrongPass123!",
         )
 
+    def test_register_creates_user_with_hashed_password(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "bob",
+                "email": "bob@example.com",
+                "password": "StrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("user", response.data)
+        self.assertNotIn("password", response.data)
+        self.assertNotIn("password", response.data["user"])
+
+        created_user = User.objects.get(username="bob")
+        self.assertEqual(created_user.email, "bob@example.com")
+        self.assertNotEqual(created_user.password, "StrongPass456!")
+        self.assertTrue(created_user.check_password("StrongPass456!"))
+
+    def test_register_rejects_duplicate_username(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "alice",
+                "email": "new@example.com",
+                "password": "StrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+
+    def test_register_rejects_duplicate_email_case_insensitively(self):
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "bob",
+                "email": "ALICE@EXAMPLE.COM",
+                "password": "StrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.data)
+
     def test_login_returns_jwt_tokens(self):
         response = self.client.post(
             reverse("auth-login"),
