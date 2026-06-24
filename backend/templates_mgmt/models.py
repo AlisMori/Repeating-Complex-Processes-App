@@ -17,6 +17,16 @@ class Template(models.Model):
     )
 
     template_version = models.PositiveIntegerField(default=1)
+
+    parent_template = models.ForeignKey(
+    "self",
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="versions")
+
+    is_current_version = models.BooleanField(default=True)
+    
     template_name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     is_public = models.BooleanField(default=False)
