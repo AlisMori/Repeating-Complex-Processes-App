@@ -7,6 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import (
     LoginSerializer,
     LoginUserSerializer,
+    LogoutSerializer,
     PasswordResetConfirmSerializer,
     RegisterSerializer,
     UserSerializer,
@@ -66,22 +67,12 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        refresh_token = request.data.get("refresh")
+        serializer = LogoutSerializer(data=request.data)
 
-        if not refresh_token:
-            return Response(
-                {"refresh": ["This field is required."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-        except Exception:
-            return Response(
-                {"refresh": ["Invalid refresh token."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        serializer.save()
 
         return Response(
             {"message": "Logged out successfully."},

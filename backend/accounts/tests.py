@@ -216,6 +216,55 @@ class AuthApiTests(APITestCase):
         )
         self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_logout_requires_authenticated_user(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+
+        response = self.client.post(
+            reverse("auth-logout"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_returns_400_when_refresh_token_is_missing(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        response = self.client.post(reverse("auth-logout"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["refresh"], ["This field is required."])
+
+    def test_logout_returns_400_when_refresh_token_is_invalid(self):
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
+        )
+
+        response = self.client.post(
+            reverse("auth-logout"),
+            {"refresh": "not-a-valid-refresh-token"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["refresh"], ["Invalid refresh token."])
+
     def test_password_reset_confirm_changes_password(self):
         uid = urlsafe_base64_encode(str(self.user.pk).encode())
         token = default_token_generator.make_token(self.user)
