@@ -1,4 +1,3 @@
-from django.contrib.auth import authenticate
 from django.contrib.auth.forms import PasswordResetForm
 from rest_framework import permissions, status
 from rest_framework.response import Response
@@ -7,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .serializers import (
     LoginSerializer,
+    LoginUserSerializer,
     PasswordResetConfirmSerializer,
     RegisterSerializer,
     UserSerializer,
@@ -46,31 +46,17 @@ class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
+        serializer = LoginSerializer(data=request.data, context={"request": request})
 
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        username = serializer.validated_data["username"]
-        password = serializer.validated_data["password"]
-
-        user = authenticate(
-            request,
-            username=username,
-            password=password,
-        )
-
-        if user is None:
-            return Response(
-                {"detail": "Invalid username or password."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        user = serializer.validated_data["user"]
 
         return Response(
             {
-                "message": "Logged in successfully.",
-                "user": UserSerializer(user).data,
-                "tokens": build_token_payload(user),
+                "user": LoginUserSerializer(user).data,
+                **build_token_payload(user),
             },
             status=status.HTTP_200_OK,
         )

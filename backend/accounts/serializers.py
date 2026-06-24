@@ -1,8 +1,9 @@
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework import serializers
 
 
@@ -21,6 +22,12 @@ class UserSerializer(serializers.ModelSerializer):
             "notification_opt_in",
             "created_at",
         ]
+
+
+class LoginUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username", "email"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -62,6 +69,27 @@ class RegisterSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
+
+    default_error_messages = {
+        "invalid_credentials": "Invalid username or password.",
+    }
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        username = attrs.get("username")
+        password = attrs.get("password")
+
+        user = authenticate(
+            request=request,
+            username=username,
+            password=password,
+        )
+
+        if user is None:
+            raise AuthenticationFailed(self.error_messages["invalid_credentials"])
+
+        attrs["user"] = user
+        return attrs
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):

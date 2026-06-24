@@ -80,9 +80,46 @@ class AuthApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn("tokens", response.data)
-        self.assertIn("access", response.data["tokens"])
-        self.assertIn("refresh", response.data["tokens"])
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["username"], "alice")
+
+    def test_login_rejects_invalid_password_with_generic_error(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "WrongPass123!"},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED],
+        )
+        self.assertEqual(response.data["detail"], "Invalid username or password.")
+
+    def test_login_rejects_nonexistent_user_with_generic_error(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": "missing", "password": "WrongPass123!"},
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            [status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED],
+        )
+        self.assertEqual(response.data["detail"], "Invalid username or password.")
+
+    def test_login_response_excludes_password_fields(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("password", response.data)
+        self.assertNotIn("password", response.data["user"])
 
     def test_me_requires_jwt_authentication(self):
         response = self.client.get(reverse("auth-me"))
@@ -94,7 +131,7 @@ class AuthApiTests(APITestCase):
             {"username": "alice", "password": "StrongPass123!"},
             format="json",
         )
-        access_token = login_response.data["tokens"]["access"]
+        access_token = login_response.data["access"]
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
         response = self.client.get(reverse("auth-me"))
@@ -108,8 +145,8 @@ class AuthApiTests(APITestCase):
             {"username": "alice", "password": "StrongPass123!"},
             format="json",
         )
-        access_token = login_response.data["tokens"]["access"]
-        refresh_token = login_response.data["tokens"]["refresh"]
+        access_token = login_response.data["access"]
+        refresh_token = login_response.data["refresh"]
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
         logout_response = self.client.post(
