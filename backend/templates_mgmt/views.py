@@ -1,10 +1,16 @@
-from rest_framework import permissions, viewsets
-from rest_framework.filters import SearchFilter
 from django.db import transaction
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 
+from core.permissions import (
+    IsOwner,
+    IsTemplateOwnerOrSharedAccess,
+    accessible_templates_q,
+    user_can_edit_template,
+)
 from .models import (
     Template,
     TemplateTask,
@@ -25,17 +31,24 @@ from .serializers import (
 
 class TemplateViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["template_name", "description"]
 
     def get_queryset(self):
-        # Users can see their own templates and public templates.
-        return Template.objects.filter(user=self.request.user) | Template.objects.filter(is_public=True)
+        return Template.objects.filter(
+            accessible_templates_q(self.request.user)
+        ).distinct()
 
     def perform_create(self, serializer):
-        # The logged-in user automatically becomes the creator of the template.
-        serializer.save(user=self.request.user, created_by_type="user"
+        template = serializer.save(
+            user=self.request.user,
+            created_by_type="user",
+        )
+        UserTemplate.objects.get_or_create(
+            user=self.request.user,
+            template=template,
+            defaults={"access_type": "owner"},
         )
 
     @action(detail=True, methods=["post"])
@@ -111,37 +124,59 @@ class TemplateViewSet(viewsets.ModelViewSet):
 
 class TemplateTaskViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["task_name", "description", "note_text"]
 
     def get_queryset(self):
-        # Users can only manage tasks that belong to their own templates or public templates.
         return TemplateTask.objects.filter(
-            template__user=self.request.user
-        ) | TemplateTask.objects.filter(
-            template__is_public=True
-        )
+            template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).distinct()
+
+    def perform_create(self, serializer):
+        template = serializer.validated_data["template"]
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        template = serializer.validated_data.get("template", serializer.instance.template)
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
 
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivitySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["activity_name", "description", "note_text"]
 
     def get_queryset(self):
-        # Users can only manage activities that belong to their own templates or public templates.
         return TemplateActivity.objects.filter(
-            template__user=self.request.user
-        ) | TemplateActivity.objects.filter(
-            template__is_public=True
-        )
+            template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).distinct()
+
+    def perform_create(self, serializer):
+        template = serializer.validated_data["template"]
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        template = serializer.validated_data.get("template", serializer.instance.template)
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
 
 
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [SearchFilter]
     search_fields = ["tag_name"]
 
