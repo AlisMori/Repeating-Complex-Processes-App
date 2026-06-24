@@ -108,6 +108,25 @@ class TemplateViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+    
+    @action(detail=True, methods=["get"])
+    def versions(self, request, pk=None):
+        template = self.get_object()
+
+        root_template = template.parent_template or template
+
+        version_list = Template.objects.filter(
+            parent_template=root_template
+        ) | Template.objects.filter(
+            template_id=root_template.template_id
+        )
+
+        version_list = version_list.order_by("template_version")
+
+        return Response(
+            TemplateSerializer(version_list, many=True).data,
+            status=status.HTTP_200_OK,
+        )
 
 class TemplateTaskViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskSerializer
