@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
@@ -117,6 +119,22 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         user.set_password(self.validated_data["new_password"])
         user.save(update_fields=["password"])
         return user
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def save(self):
+        request = self.context.get("request")
+        form = PasswordResetForm(data={"email": self.validated_data["email"]})
+        form.full_clean()
+        form.save(
+            request=request,
+            use_https=request.is_secure() if request is not None else False,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            email_template_name="registration/password_reset_email.html",
+            subject_template_name="registration/password_reset_subject.txt",
+        )
 
 
 class LogoutSerializer(serializers.Serializer):

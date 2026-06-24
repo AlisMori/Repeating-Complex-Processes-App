@@ -1,4 +1,3 @@
-from django.contrib.auth.forms import PasswordResetForm
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -9,6 +8,7 @@ from .serializers import (
     LoginUserSerializer,
     LogoutSerializer,
     PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     RegisterSerializer,
     UserSerializer,
 )
@@ -94,28 +94,19 @@ class PasswordResetView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        email = request.data.get("email")
+        serializer = PasswordResetRequestSerializer(
+            data=request.data,
+            context={"request": request},
+        )
 
-        if not email:
-            return Response(
-                {"email": ["This field is required."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        form = PasswordResetForm(data={"email": email})
-
-        if form.is_valid():
-            form.save(
-                request=request,
-                use_https=request.is_secure(),
-                from_email=None,
-                email_template_name="registration/password_reset_email.html",
-                subject_template_name="registration/password_reset_subject.txt",
-            )
+        serializer.save()
 
         return Response(
             {
-                "message": "If an account with that email exists, a password reset email has been sent."
+                "message": "If an account exists for this email, a password reset link has been sent."
             },
             status=status.HTTP_200_OK,
         )

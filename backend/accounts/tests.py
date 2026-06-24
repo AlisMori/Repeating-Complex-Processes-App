@@ -1,7 +1,9 @@
 from datetime import timedelta
+import re
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode
@@ -291,4 +293,81 @@ class AuthApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn("message", response.data)
+        self.assertEqual(
+            response.data["message"],
+            "If an account exists for this email, a password reset link has been sent.",
+        )
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_password_reset_request_unknown_email_returns_generic_success(self):
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "missing@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["message"],
+            "If an account exists for this email, a password reset link has been sent.",
+        )
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_password_reset_request_rejects_invalid_email(self):
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "not-an-email"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["email"], ["Enter a valid email address."])
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_password_reset_request_does_not_reveal_account_existence(self):
+        existing_response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "alice@example.com"},
+            format="json",
+        )
+        mail.outbox.clear()
+        unknown_response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "missing@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(existing_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(unknown_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(existing_response.data, unknown_response.data)
+
+    def test_password_reset_email_contains_uid_and_token_for_confirmation(self):
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "alice@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+
+        email = mail.outbox[0]
+        expected_uid = urlsafe_base64_encode(str(self.user.pk).encode())
+
+        self.assertIn(expected_uid, email.body)
+        self.assertIn(
+            reverse(
+                "password_reset_confirm",
+                kwargs={"uidb64": expected_uid, "token": "set-password"},
+            ).replace("set-password", ""),
+            email.body,
+        )
+
+        token_match = re.search(
+            rf"/password-reset/confirm/{re.escape(expected_uid)}/([^/]+)/",
+            email.body,
+        )
+        self.assertIsNotNone(token_match)
+        self.assertTrue(
+            default_token_generator.check_token(self.user, token_match.group(1))
+        )
