@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 from core.permissions import user_can_edit_template
 from .models import (
@@ -37,7 +38,7 @@ class TemplateTaskSerializer(serializers.ModelSerializer):
     def validate_template(self, value):
         request = self.context.get("request")
         if request is None or not user_can_edit_template(request.user, value):
-            raise serializers.ValidationError(
+            raise PermissionDenied(
                 "You do not have permission to attach a task to this template."
             )
         return value
@@ -52,7 +53,7 @@ class TemplateActivitySerializer(serializers.ModelSerializer):
     def validate_template(self, value):
         request = self.context.get("request")
         if request is None or not user_can_edit_template(request.user, value):
-            raise serializers.ValidationError(
+            raise PermissionDenied(
                 "You do not have permission to attach an activity to this template."
             )
         return value

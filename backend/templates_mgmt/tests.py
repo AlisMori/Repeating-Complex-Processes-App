@@ -118,7 +118,7 @@ class TemplateApiAuthTests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_private_template_update_returns_404_for_other_users(self):
         self.authenticate()
@@ -188,6 +188,194 @@ class TemplateApiAuthTests(APITestCase):
         response = self.client.post(
             reverse("templates-share", args=[self.public_template.template_id]),
             {"user_id": self.user.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class TemplateOwnershipAuthorizationTests(APITestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            username="user_a",
+            email="user_a@example.com",
+            password="StrongPass123!",
+        )
+        self.user_b = User.objects.create_user(
+            username="user_b",
+            email="user_b@example.com",
+            password="StrongPass123!",
+        )
+
+        self.template_a = Template.objects.create(
+            user=self.user_a,
+            template_name="User A Private Template",
+            description="Private template owned by user_a",
+        )
+        UserTemplate.objects.create(
+            user=self.user_a,
+            template=self.template_a,
+            access_type="owner",
+        )
+
+        self.task_a = self.template_a.template_tasks.create(
+            task_name="User A Template Task",
+            day_offset=0,
+            duration_days=1,
+        )
+        self.activity_a = self.template_a.template_activities.create(
+            activity_name="User A Template Activity",
+            start_offset_days=0,
+            end_offset_days=2,
+        )
+
+    def authenticate(self, user):
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+
+    def test_user_a_can_access_owned_template_resources(self):
+        self.authenticate(self.user_a)
+
+        template_response = self.client.get(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        task_response = self.client.get(
+            reverse("template-tasks-detail", args=[self.task_a.template_task_id])
+        )
+        activity_response = self.client.get(
+            reverse(
+                "template-activities-detail",
+                args=[self.activity_a.template_activity_id],
+            )
+        )
+        export_response = self.client.get(
+            reverse("templates-export", args=[self.template_a.template_id])
+        )
+
+        self.assertEqual(template_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(task_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(activity_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(export_response.status_code, status.HTTP_200_OK)
+
+    def test_user_b_cannot_list_user_a_private_template_resources(self):
+        self.authenticate(self.user_b)
+
+        templates_response = self.client.get(reverse("templates-list"))
+        tasks_response = self.client.get(reverse("template-tasks-list"))
+        activities_response = self.client.get(reverse("template-activities-list"))
+
+        self.assertEqual(templates_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(tasks_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(activities_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn(
+            self.template_a.template_id,
+            {item["template_id"] for item in templates_response.data},
+        )
+        self.assertNotIn(
+            self.task_a.template_task_id,
+            {item["template_task_id"] for item in tasks_response.data},
+        )
+        self.assertNotIn(
+            self.activity_a.template_activity_id,
+            {item["template_activity_id"] for item in activities_response.data},
+        )
+
+    def test_user_b_cannot_retrieve_update_delete_user_a_template(self):
+        self.authenticate(self.user_b)
+
+        detail_response = self.client.get(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        update_response = self.client.patch(
+            reverse("templates-detail", args=[self.template_a.template_id]),
+            {"template_name": "Unauthorized Rename"},
+            format="json",
+        )
+        delete_response = self.client.delete(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        export_response = self.client.get(
+            reverse("templates-export", args=[self.template_a.template_id])
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(export_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_b_cannot_retrieve_update_delete_user_a_template_task(self):
+        self.authenticate(self.user_b)
+
+        detail_response = self.client.get(
+            reverse("template-tasks-detail", args=[self.task_a.template_task_id])
+        )
+        update_response = self.client.patch(
+            reverse("template-tasks-detail", args=[self.task_a.template_task_id]),
+            {"task_name": "Unauthorized Task Rename"},
+            format="json",
+        )
+        delete_response = self.client.delete(
+            reverse("template-tasks-detail", args=[self.task_a.template_task_id])
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_b_cannot_retrieve_update_delete_user_a_template_activity(self):
+        self.authenticate(self.user_b)
+
+        detail_response = self.client.get(
+            reverse(
+                "template-activities-detail",
+                args=[self.activity_a.template_activity_id],
+            )
+        )
+        update_response = self.client.patch(
+            reverse(
+                "template-activities-detail",
+                args=[self.activity_a.template_activity_id],
+            ),
+            {"activity_name": "Unauthorized Activity Rename"},
+            format="json",
+        )
+        delete_response = self.client.delete(
+            reverse(
+                "template-activities-detail",
+                args=[self.activity_a.template_activity_id],
+            )
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_b_cannot_create_task_under_user_a_private_template(self):
+        self.authenticate(self.user_b)
+
+        response = self.client.post(
+            reverse("template-tasks-list"),
+            {
+                "template": self.template_a.template_id,
+                "task_name": "Unauthorized Child Task",
+                "day_offset": 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_user_b_cannot_create_activity_under_user_a_private_template(self):
+        self.authenticate(self.user_b)
+
+        response = self.client.post(
+            reverse("template-activities-list"),
+            {
+                "template": self.template_a.template_id,
+                "activity_name": "Unauthorized Child Activity",
+                "start_offset_days": 1,
+                "end_offset_days": 2,
+            },
             format="json",
         )
 
