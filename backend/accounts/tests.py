@@ -1,8 +1,11 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode
+from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -121,6 +124,46 @@ class AuthApiTests(APITestCase):
         self.assertNotIn("password", response.data)
         self.assertNotIn("password", response.data["user"])
 
+    def test_public_auth_endpoints_are_reachable_without_jwt(self):
+        register_response = self.client.post(
+            reverse("auth-register"),
+            {
+                "username": "bob",
+                "email": "bob@example.com",
+                "password": "StrongPass456!",
+            },
+            format="json",
+        )
+        login_response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+        password_reset_response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "alice@example.com"},
+            format="json",
+        )
+        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        token = default_token_generator.make_token(self.user)
+        password_reset_confirm_response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {
+                "uid": uid,
+                "token": token,
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(register_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(password_reset_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            password_reset_confirm_response.status_code,
+            status.HTTP_200_OK,
+        )
+
     def test_me_requires_jwt_authentication(self):
         response = self.client.get(reverse("auth-me"))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -138,6 +181,15 @@ class AuthApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], "alice")
+
+    def test_me_rejects_invalid_jwt(self):
+        token = AccessToken.for_user(self.user)
+        token.set_exp(lifetime=timedelta(seconds=-1))
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+        response = self.client.get(reverse("auth-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_logout_blacklists_refresh_token(self):
         login_response = self.client.post(
