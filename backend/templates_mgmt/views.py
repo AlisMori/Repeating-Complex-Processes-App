@@ -169,6 +169,61 @@ class TemplateViewSet(viewsets.ModelViewSet):
         ).data
         return Response(payload, status=status.HTTP_200_OK)
 
+    def update(self, request, *args, **kwargs):
+        original_template = self.get_object()
+
+        with transaction.atomic():
+            original_template.is_current_version = False
+            original_template.save()
+
+            new_template = Template.objects.create(
+                user=request.user,
+                parent_template=original_template.parent_template or original_template,
+                template_version=original_template.template_version + 1,
+                template_name=request.data.get("template_name", original_template.template_name),
+                description=request.data.get("description", original_template.description),
+                is_public=request.data.get("is_public", original_template.is_public),
+                created_by_type=original_template.created_by_type,
+                is_current_version=True,
+            )
+
+            UserTemplate.objects.create(
+                user=request.user,
+                template=new_template,
+                access_type="owner",
+            )
+
+            for task in original_template.template_tasks.all():
+                TemplateTask.objects.create(
+                    template=new_template,
+                    task_name=task.task_name,
+                    description=task.description,
+                    day_offset=task.day_offset,
+                    duration_days=task.duration_days,
+                    is_mandatory=task.is_mandatory,
+                    is_fixed_date=task.is_fixed_date,
+                    reminder_lead_days=task.reminder_lead_days,
+                    note_text=task.note_text,
+                )
+
+            for activity in original_template.template_activities.all():
+                TemplateActivity.objects.create(
+                    template=new_template,
+                    activity_name=activity.activity_name,
+                    description=activity.description,
+                    start_offset_days=activity.start_offset_days,
+                    end_offset_days=activity.end_offset_days,
+                    note_text=activity.note_text,
+                )
+
+        return Response(
+            {
+                "message": "New template version created successfully.",
+                "template": TemplateSerializer(new_template).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+    
     @action(detail=True, methods=["post"])
     def duplicate(self, request, pk=None):
         # Create a deep copy of an existing template, including its tasks,
