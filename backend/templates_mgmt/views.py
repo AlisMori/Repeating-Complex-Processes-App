@@ -1,10 +1,21 @@
-from rest_framework import permissions, viewsets
-from rest_framework.filters import SearchFilter
+from django.contrib.auth import get_user_model
+from datetime import timedelta
 from django.db import transaction
+from django.utils.dateparse import parse_date
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 
+from core.permissions import (
+    IsOwner,
+    IsTemplateOwnerOrSharedAccess,
+    accessible_templates_q,
+    user_can_access_template,
+    user_can_edit_template,
+)
+from cycles.models import CycleActivity, CycleInstance, CycleTask
 from .models import (
     Template,
     TemplateTask,
@@ -23,20 +34,140 @@ from .serializers import (
 )
 
 
+User = get_user_model()
+
+
 class TemplateViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["template_name", "description"]
 
     def get_queryset(self):
-        # Users can see their own templates and public templates.
-        return Template.objects.filter(user=self.request.user) | Template.objects.filter(is_public=True)
+        return Template.objects.filter(
+            accessible_templates_q(self.request.user)
+        ).distinct()
 
     def perform_create(self, serializer):
-        # The logged-in user automatically becomes the creator of the template.
-        serializer.save(user=self.request.user, created_by_type="user"
+        template = serializer.save(
+            user=self.request.user,
+            created_by_type="user",
         )
+        UserTemplate.objects.get_or_create(
+            user=self.request.user,
+            template=template,
+            defaults={"access_type": "owner"},
+        )
+
+    @action(detail=True, methods=["post"])
+    def share(self, request, pk=None):
+        template = self.get_object()
+        if not user_can_edit_template(request.user, template):
+            raise PermissionDenied("You do not have permission to share this template.")
+
+        target_user_id = request.data.get("user_id")
+        if not target_user_id:
+            return Response(
+                {"user_id": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            target_user = User.objects.get(pk=target_user_id)
+        except User.DoesNotExist:
+            return Response(
+                {"user_id": ["User not found."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        relation, _ = UserTemplate.objects.update_or_create(
+            user=target_user,
+            template=template,
+            defaults={"access_type": "shared"},
+        )
+        return Response(
+            {
+                "message": "Template shared successfully.",
+                "user_template_id": relation.user_template_id,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"])
+    def create_cycle(self, request, pk=None):
+        template = self.get_object()
+        if not user_can_access_template(request.user, template):
+            raise PermissionDenied("You do not have permission to create a cycle from this template.")
+
+        start_date = request.data.get("start_date")
+        cycle_name = request.data.get("cycle_name") or template.template_name
+        if not start_date:
+            return Response(
+                {"start_date": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        parsed_start_date = parse_date(start_date)
+        if parsed_start_date is None:
+            return Response(
+                {"start_date": ["Date has wrong format. Use YYYY-MM-DD."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            cycle = CycleInstance.objects.create(
+                user=request.user,
+                template=template,
+                cycle_name=cycle_name,
+                start_date=parsed_start_date,
+            )
+
+            for template_task in template.template_tasks.all():
+                start = cycle.start_date + timedelta(days=template_task.day_offset)
+                duration = template_task.duration_days or 0
+                cycle_task = CycleTask.objects.create(
+                    cycle=cycle,
+                    template_task=template_task,
+                    task_name=template_task.task_name,
+                    calculated_start_date=start,
+                    calculated_end_date=start + timedelta(days=duration),
+                    is_mandatory=template_task.is_mandatory,
+                    is_fixed_date=template_task.is_fixed_date,
+                    reminder_lead_days=template_task.reminder_lead_days,
+                    note_text=template_task.note_text,
+                )
+
+            for template_activity in template.template_activities.all():
+                CycleActivity.objects.create(
+                    cycle=cycle,
+                    template_activity=template_activity,
+                    activity_name=template_activity.activity_name,
+                    calculated_start_date=cycle.start_date + timedelta(days=template_activity.start_offset_days),
+                    calculated_end_date=cycle.start_date + timedelta(days=template_activity.end_offset_days),
+                    note_text=template_activity.note_text,
+                )
+
+        from cycles.serializers import CycleInstanceSerializer
+
+        return Response(
+            CycleInstanceSerializer(cycle, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["get"])
+    def export(self, request, pk=None):
+        template = self.get_object()
+        payload = self.get_serializer(template).data
+        payload["template_tasks"] = TemplateTaskSerializer(
+            template.template_tasks.all(),
+            many=True,
+            context=self.get_serializer_context(),
+        ).data
+        payload["template_activities"] = TemplateActivitySerializer(
+            template.template_activities.all(),
+            many=True,
+            context=self.get_serializer_context(),
+        ).data
+        return Response(payload, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def duplicate(self, request, pk=None):
@@ -111,37 +242,59 @@ class TemplateViewSet(viewsets.ModelViewSet):
 
 class TemplateTaskViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["task_name", "description", "note_text"]
 
     def get_queryset(self):
-        # Users can only manage tasks that belong to their own templates or public templates.
         return TemplateTask.objects.filter(
-            template__user=self.request.user
-        ) | TemplateTask.objects.filter(
-            template__is_public=True
-        )
+            template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).distinct()
+
+    def perform_create(self, serializer):
+        template = serializer.validated_data["template"]
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        template = serializer.validated_data.get("template", serializer.instance.template)
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
 
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivitySerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
     filter_backends = [SearchFilter]
     search_fields = ["activity_name", "description", "note_text"]
 
     def get_queryset(self):
-        # Users can only manage activities that belong to their own templates or public templates.
         return TemplateActivity.objects.filter(
-            template__user=self.request.user
-        ) | TemplateActivity.objects.filter(
-            template__is_public=True
-        )
+            template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).distinct()
+
+    def perform_create(self, serializer):
+        template = serializer.validated_data["template"]
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        template = serializer.validated_data.get("template", serializer.instance.template)
+        if not user_can_edit_template(self.request.user, template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+        serializer.save()
 
 
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
     filter_backends = [SearchFilter]
     search_fields = ["tag_name"]
 
