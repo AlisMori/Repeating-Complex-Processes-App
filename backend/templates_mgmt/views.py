@@ -239,6 +239,95 @@ class TemplateViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+    
+    @action(detail=True, methods=["get"])
+    def versions(self, request, pk=None):
+        template = self.get_object()
+
+        root_template = template.parent_template or template
+
+        version_list = Template.objects.filter(
+            parent_template=root_template
+        ) | Template.objects.filter(
+            template_id=root_template.template_id
+        )
+
+        version_list = version_list.order_by("template_version")
+
+        return Response(
+            TemplateSerializer(version_list, many=True).data,
+            status=status.HTTP_200_OK,
+        )
+    
+    @action(detail=True, methods=["post"])
+    def share(self, request, pk=None):
+        # Share a template by creating an independent deep copy for another user.
+        original_template = self.get_object()
+        username = request.data.get("username")
+
+        if not username:
+            return Response(
+                {"username": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        try:
+            target_user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "User not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        with transaction.atomic():
+            shared_template = Template.objects.create(
+                user=target_user,
+                template_version=1,
+                template_name=f"{original_template.template_name} Shared Copy",
+                description=original_template.description,
+                is_public=False,
+                created_by_type="shared",
+            )
+
+            UserTemplate.objects.create(
+                user=target_user,
+                template=shared_template,
+                access_type="shared",
+            )
+
+            for task in original_template.template_tasks.all():
+                TemplateTask.objects.create(
+                    template=shared_template,
+                    task_name=task.task_name,
+                    description=task.description,
+                    day_offset=task.day_offset,
+                    duration_days=task.duration_days,
+                    is_mandatory=task.is_mandatory,
+                    is_fixed_date=task.is_fixed_date,
+                    reminder_lead_days=task.reminder_lead_days,
+                    note_text=task.note_text,
+                )
+
+            for activity in original_template.template_activities.all():
+                TemplateActivity.objects.create(
+                    template=shared_template,
+                    activity_name=activity.activity_name,
+                    description=activity.description,
+                    start_offset_days=activity.start_offset_days,
+                    end_offset_days=activity.end_offset_days,
+                    note_text=activity.note_text,
+                )
+
+        return Response(
+            {
+                "message": "Template shared successfully.",
+                "template": TemplateSerializer(shared_template).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 class TemplateTaskViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskSerializer
