@@ -60,6 +60,18 @@
           <span>Version: {{ template.template_version }}</span>
           <span>{{ template.is_public ? 'Public' : 'Private' }}</span>
         </div>
+        <div class="actions">
+          <button type="button" @click="duplicateTemplate(template.template_id)">
+            Duplicate
+          </button>
+          
+          <button
+            type="button"
+            @click="deleteTemplate(template.template_id)"
+          >
+            Delete
+          </button>
+        </div>
       </article>
     </section>
   </main>
@@ -81,6 +93,26 @@ const form = reactive({
   template_version: 1,
   created_by_type: 'user',
 })
+
+async function deleteTemplate(templateId) {
+  const confirmed = window.confirm('Delete this template?')
+
+  if (!confirmed) {
+    return
+  }
+
+  error.value = ''
+
+  try {
+    await api.delete(`/templates/${templateId}/`, {
+      requiresAuth: true,
+    })
+
+    await fetchTemplates()
+  } catch (err) {
+    error.value = 'Could not delete template.'
+  }
+}
 
 async function fetchTemplates() {
   loading.value = true
@@ -118,6 +150,20 @@ async function createTemplate() {
   }
 }
 
+async function duplicateTemplate(templateId) {
+  error.value = ''
+
+  try {
+    await api.post(`/templates/${templateId}/duplicate/`, {}, {
+      requiresAuth: true,
+    })
+
+    await fetchTemplates()
+  } catch (err) {
+    error.value = 'Could not duplicate template.'
+  }
+}
+
 onMounted(fetchTemplates)
 </script>
 
@@ -126,6 +172,14 @@ onMounted(fetchTemplates)
   max-width: 960px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.actions {
+  margin-top: 1rem;
+}
+
+.actions button {
+  padding: 0.5rem 0.9rem;
 }
 
 .page-header {
