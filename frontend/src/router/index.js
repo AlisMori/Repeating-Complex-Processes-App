@@ -8,6 +8,7 @@ import PasswordResetRequestView from '../views/PasswordResetRequestView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import { useAuthStore } from '../stores/auth'
 import pinia from '../stores'
+import TemplatesView from '../views/TemplatesView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -47,6 +48,12 @@ const router = createRouter({
       path: '/dashboard',
       name: 'dashboard',
       component: DashboardView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/templates',
+      name: 'templates',
+      component: TemplatesView,
       meta: { requiresAuth: true },
     },
     {
