@@ -71,6 +71,27 @@
           >
             Delete
           </button>
+
+          <button
+            type="button"
+            @click="viewVersions(template.template_id)"
+          >
+            Versions
+          </button>
+
+          <button
+            type="button"
+            @click="shareTemplate(template.template_id)"
+          >
+            Share
+          </button>
+
+          <button
+            type="button"
+            @click="updateTemplate(template)"
+          >
+            New Version
+          </button>
         </div>
       </article>
     </section>
@@ -164,6 +185,94 @@ async function duplicateTemplate(templateId) {
   }
 }
 
+async function viewVersions(templateId) {
+  error.value = ''
+
+  try {
+    const response = await api.get(
+      `/templates/${templateId}/versions/`,
+      {
+        requiresAuth: true,
+      }
+    )
+
+    const versions = response.data
+      .map(
+        (v) =>
+          `Version ${v.template_version}: ${v.template_name}`
+      )
+      .join('\n')
+
+    alert(
+      versions || 'No versions found.'
+    )
+  } catch (err) {
+    error.value = 'Could not load template versions.'
+  }
+}
+
+async function shareTemplate(templateId) {
+  const username = window.prompt('Enter username to share with:')
+
+  if (!username) {
+    return
+  }
+
+  error.value = ''
+
+  try {
+    await api.post(
+      `/templates/${templateId}/share/`,
+      { username },
+      {
+        requiresAuth: true,
+      }
+    )
+
+    alert('Template shared successfully.')
+  } catch (err) {
+    error.value = 'Could not share template. Check that the username exists.'
+  }
+}
+
+async function updateTemplate(template) {
+  const newName = window.prompt(
+    'Enter new template name:',
+    template.template_name
+  )
+
+  if (!newName) {
+    return
+  }
+
+  const newDescription = window.prompt(
+    'Enter new description:',
+    template.description || ''
+  )
+
+  error.value = ''
+
+  try {
+    await api.put(
+      `/templates/${template.template_id}/`,
+      {
+        template_name: newName,
+        description: newDescription,
+        is_public: template.is_public,
+        template_version: template.template_version,
+        created_by_type: template.created_by_type || 'user',
+      },
+      {
+        requiresAuth: true,
+      }
+    )
+
+    alert('New template version created successfully.')
+    await fetchTemplates()
+  } catch (err) {
+    error.value = 'Could not create new template version.'
+  }
+}
 onMounted(fetchTemplates)
 </script>
 
