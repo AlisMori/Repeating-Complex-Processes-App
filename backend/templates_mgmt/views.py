@@ -31,6 +31,8 @@ from .serializers import (
     TemplateTaskSerializer,
     TemplateActivitySerializer,
     TagSerializer,
+    TemplateTaskTagSerializer,
+    TemplateActivityTagSerializer,
 )
 
 
@@ -449,3 +451,23 @@ class TagViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # The logged-in user automatically becomes the owner of the tag.
         serializer.save(user=self.request.user)
+
+
+class TemplateTaskTagViewSet(viewsets.ModelViewSet):
+    serializer_class = TemplateTaskTagSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return TemplateTaskTag.objects.filter(
+            template_task__template__user=self.request.user
+        )
+
+
+class TemplateActivityTagViewSet(viewsets.ModelViewSet):
+    serializer_class = TemplateActivityTagSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return TemplateActivityTag.objects.filter(
+            template_activity__template__user=self.request.user
+        )
