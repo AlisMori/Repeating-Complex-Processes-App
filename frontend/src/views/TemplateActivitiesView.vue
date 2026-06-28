@@ -46,32 +46,46 @@
     </section>
 
     <section class="tag-form">
-        <h2>Create Tag</h2>
+      <h2>Create Tag</h2>
 
-        <form @submit.prevent="createTag">
-            <label>
-            Tag Name
-            <input
-                v-model="newTagName"
-                type="text"
-                placeholder="Example: Important"
-            />
-            </label>
+      <form @submit.prevent="createTag">
+        <label>
+          Tag Name
+          <input
+            v-model="newTagName"
+            type="text"
+            placeholder="Example: Important"
+          />
+        </label>
 
-            <button type="submit">
-            Create Tag
-            </button>
-        </form>
+        <button type="submit">Create Tag</button>
+      </form>
     </section>
 
     <section class="activity-list">
       <h2>Activity List</h2>
 
+      <div class="filter-box">
+        <label>
+          Filter by Tag
+          <select v-model="selectedFilterTag">
+            <option value="">All Tags</option>
+            <option
+              v-for="tag in tags"
+              :key="tag.tag_id"
+              :value="tag.tag_id"
+            >
+              {{ tag.tag_name }}
+            </option>
+          </select>
+        </label>
+      </div>
+
       <p v-if="loading">Loading activities...</p>
       <p v-if="error" class="error">{{ error }}</p>
 
       <article
-        v-for="activity in activities"
+        v-for="activity in filteredActivities()"
         :key="activity.template_activity_id"
         class="activity-card"
       >
@@ -81,35 +95,42 @@
         <p>End offset: {{ activity.end_offset_days }}</p>
 
         <div class="activity-tags">
-            <strong>Tags:</strong>
+          <strong>Tags:</strong>
 
-            <span
-                v-for="activityTag in getActivityTags(activity.template_activity_id)"
-                :key="activityTag.template_activity_tag_id"
-                class="tag-chip"
+          <span
+            v-for="activityTag in getActivityTags(activity.template_activity_id)"
+            :key="activityTag.template_activity_tag_id"
+            class="tag-chip"
+          >
+            {{ getTagName(activityTag.tag) }}
+            <button
+              type="button"
+              class="remove-tag"
+              @click="removeTagFromActivity(activityTag.template_activity_tag_id)"
             >
-                {{ getTagName(activityTag.tag) }}
-            </span>
+              ×
+            </button>
+          </span>
         </div>
 
         <div class="assign-tag">
-            <select v-model="selectedTags[activity.template_activity_id]">
-                <option disabled value="">Select tag</option>
-                <option
-                v-for="tag in tags"
-                :key="tag.tag_id"
-                :value="tag.tag_id"
-                >
-                {{ tag.tag_name }}
-                </option>
-            </select>
-
-            <button
-                type="button"
-                @click="assignTagToActivity(activity.template_activity_id)"
+          <select v-model="selectedTags[activity.template_activity_id]">
+            <option disabled value="">Select tag</option>
+            <option
+              v-for="tag in tags"
+              :key="tag.tag_id"
+              :value="tag.tag_id"
             >
-                Add Tag
-            </button>
+              {{ tag.tag_name }}
+            </option>
+          </select>
+
+          <button
+            type="button"
+            @click="assignTagToActivity(activity.template_activity_id)"
+          >
+            Add Tag
+          </button>
         </div>
       </article>
     </section>
@@ -129,6 +150,7 @@ const tags = ref([])
 const activityTags = ref([])
 const newTagName = ref('')
 const selectedTags = reactive({})
+const selectedFilterTag = ref('')
 
 const form = reactive({
   template: '',
@@ -215,6 +237,8 @@ async function createTag() {
     return
   }
 
+  error.value = ''
+
   try {
     await api.post(
       '/tags/',
@@ -236,6 +260,17 @@ async function assignTagToActivity(activityId) {
     return
   }
 
+  const alreadyAssigned = activityTags.value.some(
+    (item) => item.template_activity === activityId && item.tag === tagId,
+  )
+
+  if (alreadyAssigned) {
+    error.value = 'This tag is already assigned to this activity.'
+    return
+  }
+
+  error.value = ''
+
   try {
     await api.post(
       '/template-activity-tags/',
@@ -253,18 +288,46 @@ async function assignTagToActivity(activityId) {
   }
 }
 
+async function removeTagFromActivity(activityTagId) {
+  error.value = ''
+
+  try {
+    await api.delete(`/template-activity-tags/${activityTagId}/`, {
+      requiresAuth: true,
+    })
+
+    await fetchActivityTags()
+  } catch (err) {
+    error.value = 'Could not remove tag from activity.'
+  }
+}
+
 function getActivityTags(activityId) {
   return activityTags.value.filter(
-    (item) => item.template_activity === activityId
+    (item) => item.template_activity === activityId,
   )
 }
 
 function getTagName(tagId) {
   const tag = tags.value.find(
-    (item) => item.tag_id === tagId
+    (item) => item.tag_id === tagId,
   )
 
   return tag ? tag.tag_name : 'Tag'
+}
+
+function filteredActivities() {
+  if (!selectedFilterTag.value) {
+    return activities.value
+  }
+
+  const activityIds = activityTags.value
+    .filter((item) => item.tag === selectedFilterTag.value)
+    .map((item) => item.template_activity)
+
+  return activities.value.filter((activity) =>
+    activityIds.includes(activity.template_activity_id),
+  )
 }
 
 onMounted(async () => {
@@ -283,7 +346,8 @@ onMounted(async () => {
 }
 
 .activity-form,
-.activity-list {
+.activity-list,
+.tag-form {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
@@ -325,14 +389,6 @@ button {
   margin-top: 1rem;
 }
 
-.tag-form {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-top: 1.5rem;
-}
-
 .activity-tags {
   display: flex;
   gap: 0.5rem;
@@ -347,11 +403,23 @@ button {
   font-size: 0.85rem;
 }
 
+.remove-tag {
+  margin-left: 0.4rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
 .assign-tag {
   display: flex;
   gap: 0.75rem;
   margin-top: 1rem;
   align-items: center;
+}
+
+.filter-box {
+  margin-bottom: 1rem;
 }
 
 .error {

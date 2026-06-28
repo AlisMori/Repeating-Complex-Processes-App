@@ -23,128 +23,114 @@
 
         <label>
           Task Name
-          <input
-            v-model="form.task_name"
-            type="text"
-            required
-          />
+          <input v-model="form.task_name" type="text" required />
         </label>
 
         <label>
           Description
-          <textarea
-            v-model="form.description"
-          ></textarea>
+          <textarea v-model="form.description"></textarea>
         </label>
 
         <label>
           Day Offset
-          <input
-            v-model.number="form.day_offset"
-            type="number"
-            min="0"
-            required
-          />
+          <input v-model.number="form.day_offset" type="number" min="0" required />
         </label>
 
         <label>
           Duration Days
-          <input
-            v-model.number="form.duration_days"
-            type="number"
-            min="0"
-          />
+          <input v-model.number="form.duration_days" type="number" min="0" />
         </label>
 
-        <button type="submit">
-          Create Task
-        </button>
+        <button type="submit">Create Task</button>
       </form>
     </section>
 
     <section class="tag-form">
-        <h2>Create Tag</h2>
+      <h2>Create Tag</h2>
 
-        <form @submit.prevent="createTag">
-            <label>
-            Tag Name
-            <input
-                v-model="newTagName"
-                type="text"
-                placeholder="Example: Important"
-            />
-            </label>
+      <form @submit.prevent="createTag">
+        <label>
+          Tag Name
+          <input
+            v-model="newTagName"
+            type="text"
+            placeholder="Example: Important"
+          />
+        </label>
 
-            <button type="submit">
-            Create Tag
-            </button>
-        </form>
+        <button type="submit">Create Tag</button>
+      </form>
     </section>
 
     <section class="task-list">
       <h2>Task List</h2>
 
-      <p v-if="loading">
-        Loading tasks...
-      </p>
+      <div class="filter-box">
+        <label>
+          Filter by Tag
+          <select v-model="selectedFilterTag">
+            <option value="">All Tags</option>
+            <option
+              v-for="tag in tags"
+              :key="tag.tag_id"
+              :value="tag.tag_id"
+            >
+              {{ tag.tag_name }}
+            </option>
+          </select>
+        </label>
+      </div>
 
-      <p
-        v-if="error"
-        class="error"
-      >
-        {{ error }}
-      </p>
+      <p v-if="loading">Loading tasks...</p>
+      <p v-if="error" class="error">{{ error }}</p>
 
       <article
-        v-for="task in tasks"
+        v-for="task in filteredTasks()"
         :key="task.template_task_id"
         class="task-card"
       >
         <h3>{{ task.task_name }}</h3>
+        <p>{{ task.description || 'No description provided.' }}</p>
+        <p>Day offset: {{ task.day_offset }}</p>
+        <p>Duration: {{ task.duration_days || 0 }} days</p>
 
-        <p>
-          {{ task.description || 'No description provided.' }}
-        </p>
-
-        <p>
-          Day offset:
-          {{ task.day_offset }}
-        </p>
-
-        <p>
-          Duration:
-          {{ task.duration_days || 0 }} days
-        </p>
         <div class="task-tags">
-            <strong>Tags:</strong>
+          <strong>Tags:</strong>
 
-            <span
-                v-for="taskTag in getTaskTags(task.template_task_id)"
-                :key="taskTag.template_task_tag_id"
-                class="tag-chip"
-            >
-                {{ getTagName(taskTag.tag) }}
-            </span>
-            </div>
-
-            <div class="assign-tag">
-            <select v-model="selectedTags[task.template_task_id]">
-                <option disabled value="">Select tag</option>
-                <option
-                v-for="tag in tags"
-                :key="tag.tag_id"
-                :value="tag.tag_id"
-                >
-                {{ tag.tag_name }}
-                </option>
-            </select>
-
+          <span
+            v-for="taskTag in getTaskTags(task.template_task_id)"
+            :key="taskTag.template_task_tag_id"
+            class="tag-chip"
+          >
+            {{ getTagName(taskTag.tag) }}
             <button
-                type="button"
-                @click="assignTagToTask(task.template_task_id)"
+              type="button"
+              class="remove-tag"
+              @click="removeTagFromTask(taskTag.template_task_tag_id)"
             >
-                Add Tag
+              ×
             </button>
+          </span>
+        </div>
+
+        <div class="assign-tag">
+          <select v-model="selectedTags[task.template_task_id]">
+            <option disabled value="">Select tag</option>
+            <option
+              v-for="tag in tags"
+              :key="tag.tag_id"
+              :value="tag.tag_id"
+            >
+              {{ tag.tag_name }}
+            </option>
+          </select>
+
+          <button
+            type="button"
+            @click="assignTagToTask(task.template_task_id)"
+          >
+            Add Tag
+          </button>
         </div>
       </article>
     </section>
@@ -164,6 +150,7 @@ const tags = ref([])
 const taskTags = ref([])
 const newTagName = ref('')
 const selectedTags = reactive({})
+const selectedFilterTag = ref('')
 
 const form = reactive({
   template: '',
@@ -206,13 +193,9 @@ async function createTask() {
   error.value = ''
 
   try {
-    await api.post(
-      '/template-tasks/',
-      form,
-      {
-        requiresAuth: true,
-      },
-    )
+    await api.post('/template-tasks/', form, {
+      requiresAuth: true,
+    })
 
     form.task_name = ''
     form.description = ''
@@ -254,6 +237,8 @@ async function createTag() {
     return
   }
 
+  error.value = ''
+
   try {
     await api.post(
       '/tags/',
@@ -275,6 +260,17 @@ async function assignTagToTask(taskId) {
     return
   }
 
+  const alreadyAssigned = taskTags.value.some(
+    (item) => item.template_task === taskId && item.tag === tagId,
+  )
+
+  if (alreadyAssigned) {
+    error.value = 'This tag is already assigned to this task.'
+    return
+  }
+
+  error.value = ''
+
   try {
     await api.post(
       '/template-task-tags/',
@@ -292,18 +288,46 @@ async function assignTagToTask(taskId) {
   }
 }
 
+async function removeTagFromTask(taskTagId) {
+  error.value = ''
+
+  try {
+    await api.delete(`/template-task-tags/${taskTagId}/`, {
+      requiresAuth: true,
+    })
+
+    await fetchTaskTags()
+  } catch (err) {
+    error.value = 'Could not remove tag from task.'
+  }
+}
+
 function getTaskTags(taskId) {
   return taskTags.value.filter(
-    (item) => item.template_task === taskId
+    (item) => item.template_task === taskId,
   )
 }
 
 function getTagName(tagId) {
   const tag = tags.value.find(
-    (item) => item.tag_id === tagId
+    (item) => item.tag_id === tagId,
   )
 
   return tag ? tag.tag_name : 'Tag'
+}
+
+function filteredTasks() {
+  if (!selectedFilterTag.value) {
+    return tasks.value
+  }
+
+  const taskIds = taskTags.value
+    .filter((item) => item.tag === selectedFilterTag.value)
+    .map((item) => item.template_task)
+
+  return tasks.value.filter((task) =>
+    taskIds.includes(task.template_task_id),
+  )
 }
 
 onMounted(async () => {
@@ -322,7 +346,8 @@ onMounted(async () => {
 }
 
 .task-form,
-.task-list {
+.task-list,
+.tag-form {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
@@ -364,14 +389,6 @@ button {
   margin-top: 1rem;
 }
 
-.tag-form {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-top: 1.5rem;
-}
-
 .task-tags {
   display: flex;
   gap: 0.5rem;
@@ -386,11 +403,23 @@ button {
   font-size: 0.85rem;
 }
 
+.remove-tag {
+  margin-left: 0.4rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
 .assign-tag {
   display: flex;
   gap: 0.75rem;
   margin-top: 1rem;
   align-items: center;
+}
+
+.filter-box {
+  margin-bottom: 1rem;
 }
 
 .error {
