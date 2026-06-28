@@ -22,6 +22,8 @@ router.register(
     basename="template-task-tags",
 )
 
+
+
 router.register(
     "template-activity-tags",
     TemplateActivityTagViewSet,
