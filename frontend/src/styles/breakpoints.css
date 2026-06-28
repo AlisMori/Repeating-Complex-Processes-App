@@ -1,0 +1,87 @@
+/* ============================================
+   RECURRA — RESPONSIVE BREAKPOINTS (NFR-2.2)
+   /frontend/src/styles/breakpoints.css
+   ============================================ */
+
+/*
+  Breakpoint system:
+  --bp-sm:  640px   (phone landscape)
+  --bp-md:  768px   (tablet portrait)
+  --bp-lg:  1024px  (tablet landscape / small laptop)
+  --bp-xl:  1280px  (desktop)
+  --bp-2xl: 1440px  (large desktop)
+*/
+
+/* Sidebar collapses to icon-only on tablet */
+@media (max-width: 1024px) {
+  .app-layout .sidebar {
+    width: 64px;
+  }
+
+  .app-layout .sidebar .nav-label,
+  .app-layout .sidebar .logo-text,
+  .app-layout .sidebar .nav-section-label,
+  .app-layout .sidebar .user-info,
+  .app-layout .sidebar .nav-badge {
+    display: none;
+  }
+
+  .app-layout .sidebar .logo-area {
+    justify-content: center;
+    padding: 20px 0;
+  }
+
+  .app-layout .sidebar .nav-item {
+    justify-content: center;
+    padding: 10px 0;
+  }
+
+  .app-layout .main-content {
+    margin-left: 64px;
+  }
+}
+
+/* Auth layout stacks on mobile */
+@media (max-width: 768px) {
+  .auth-layout {
+    flex-direction: column;
+  }
+
+  .auth-layout .auth-left {
+    width: 100%;
+    min-height: 220px;
+    padding: 28px 24px;
+  }
+
+  .auth-layout .auth-left .feature-list {
+    display: none;
+  }
+
+  .auth-layout .auth-left .brand-content {
+    margin-top: 16px;
+  }
+
+  .auth-layout .auth-right {
+    padding: 32px 24px;
+  }
+
+  .auth-layout .auth-right .form-card {
+    max-width: 100%;
+  }
+}
+
+/* Two-column form rows stack on small phones */
+@media (max-width: 480px) {
+  .form-row-2 {
+    flex-direction: column !important;
+    gap: 0 !important;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .content-area {
+    padding: 16px;
+  }
+}

@@ -1,0 +1,62 @@
+/* ============================================
+   RECURRA — CSS VARIABLES & DESIGN TOKENS
+   /frontend/src/styles/variables.css
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+  /* ── BRAND COLORS ── */
+  --violet:        #7C3AED;
+  --violet-dark:   #5B21B6;
+  --violet-deeper: #4C1D95;
+  --violet-bg:     #F5F3FF;
+  --violet-mid:    #EDE9FE;
+
+  /* ── NEUTRALS ── */
+  --white:          #FFFFFF;
+  --bg-page:        #F8FAFC;
+  --text-primary:   #1E293B;
+  --text-secondary: #64748B;
+  --text-muted:     #94A3B8;
+  --border:         #CBD5E1;
+  --border-light:   #E2E8F0;
+
+  /* ── STATUS COLORS ── */
+  --success:     #22C55E;
+  --success-bg:  #F0FDF4;
+  --warning:     #F59E0B;
+  --warning-bg:  #FFFBEB;
+  --danger:      #EF4444;
+  --danger-bg:   #FEF2F2;
+  --info:        #3B82F6;
+  --info-bg:     #EFF6FF;
+
+  /* ── TYPOGRAPHY ── */
+  --font-main: 'Inter', sans-serif;
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 13.5px;
+  --text-md:   14px;
+  --text-lg:   16px;
+  --text-xl:   18px;
+  --text-2xl:  22px;
+  --text-3xl:  28px;
+
+  /* ── SPACING ── */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+
+  /* ── SHADOWS ── */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+
+  /* ── SIDEBAR ── */
+  --sidebar-width: 240px;
+
+  /* ── TRANSITIONS ── */
+  --transition-fast: 0.15s ease;
+}
