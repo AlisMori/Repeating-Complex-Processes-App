@@ -62,6 +62,25 @@
       </form>
     </section>
 
+    <section class="tag-form">
+        <h2>Create Tag</h2>
+
+        <form @submit.prevent="createTag">
+            <label>
+            Tag Name
+            <input
+                v-model="newTagName"
+                type="text"
+                placeholder="Example: Important"
+            />
+            </label>
+
+            <button type="submit">
+            Create Tag
+            </button>
+        </form>
+    </section>
+
     <section class="task-list">
       <h2>Task List</h2>
 
@@ -96,6 +115,37 @@
           Duration:
           {{ task.duration_days || 0 }} days
         </p>
+        <div class="task-tags">
+            <strong>Tags:</strong>
+
+            <span
+                v-for="taskTag in getTaskTags(task.template_task_id)"
+                :key="taskTag.template_task_tag_id"
+                class="tag-chip"
+            >
+                {{ getTagName(taskTag.tag) }}
+            </span>
+            </div>
+
+            <div class="assign-tag">
+            <select v-model="selectedTags[task.template_task_id]">
+                <option disabled value="">Select tag</option>
+                <option
+                v-for="tag in tags"
+                :key="tag.tag_id"
+                :value="tag.tag_id"
+                >
+                {{ tag.tag_name }}
+                </option>
+            </select>
+
+            <button
+                type="button"
+                @click="assignTagToTask(task.template_task_id)"
+            >
+                Add Tag
+            </button>
+        </div>
       </article>
     </section>
   </main>
@@ -109,6 +159,11 @@ const templates = ref([])
 const tasks = ref([])
 const loading = ref(false)
 const error = ref('')
+
+const tags = ref([])
+const taskTags = ref([])
+const newTagName = ref('')
+const selectedTags = reactive({})
 
 const form = reactive({
   template: '',
@@ -170,9 +225,92 @@ async function createTask() {
   }
 }
 
+async function fetchTags() {
+  try {
+    const response = await api.get('/tags/', {
+      requiresAuth: true,
+    })
+
+    tags.value = response.data
+  } catch (err) {
+    error.value = 'Could not load tags.'
+  }
+}
+
+async function fetchTaskTags() {
+  try {
+    const response = await api.get('/template-task-tags/', {
+      requiresAuth: true,
+    })
+
+    taskTags.value = response.data
+  } catch (err) {
+    error.value = 'Could not load task tags.'
+  }
+}
+
+async function createTag() {
+  if (!newTagName.value) {
+    return
+  }
+
+  try {
+    await api.post(
+      '/tags/',
+      { tag_name: newTagName.value },
+      { requiresAuth: true },
+    )
+
+    newTagName.value = ''
+    await fetchTags()
+  } catch (err) {
+    error.value = 'Could not create tag.'
+  }
+}
+
+async function assignTagToTask(taskId) {
+  const tagId = selectedTags[taskId]
+
+  if (!tagId) {
+    return
+  }
+
+  try {
+    await api.post(
+      '/template-task-tags/',
+      {
+        template_task: taskId,
+        tag: tagId,
+      },
+      { requiresAuth: true },
+    )
+
+    selectedTags[taskId] = ''
+    await fetchTaskTags()
+  } catch (err) {
+    error.value = 'Could not assign tag to task.'
+  }
+}
+
+function getTaskTags(taskId) {
+  return taskTags.value.filter(
+    (item) => item.template_task === taskId
+  )
+}
+
+function getTagName(tagId) {
+  const tag = tags.value.find(
+    (item) => item.tag_id === tagId
+  )
+
+  return tag ? tag.tag_name : 'Tag'
+}
+
 onMounted(async () => {
   await fetchTemplates()
   await fetchTasks()
+  await fetchTags()
+  await fetchTaskTags()
 })
 </script>
 
@@ -224,6 +362,35 @@ button {
   border-radius: 10px;
   padding: 1rem;
   margin-top: 1rem;
+}
+
+.tag-form {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.task-tags {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.8rem;
+}
+
+.tag-chip {
+  background: #eef2ff;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.assign-tag {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  align-items: center;
 }
 
 .error {

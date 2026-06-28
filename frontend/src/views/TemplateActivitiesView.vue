@@ -45,6 +45,25 @@
       </form>
     </section>
 
+    <section class="tag-form">
+        <h2>Create Tag</h2>
+
+        <form @submit.prevent="createTag">
+            <label>
+            Tag Name
+            <input
+                v-model="newTagName"
+                type="text"
+                placeholder="Example: Important"
+            />
+            </label>
+
+            <button type="submit">
+            Create Tag
+            </button>
+        </form>
+    </section>
+
     <section class="activity-list">
       <h2>Activity List</h2>
 
@@ -60,6 +79,38 @@
         <p>{{ activity.description || 'No description provided.' }}</p>
         <p>Start offset: {{ activity.start_offset_days }}</p>
         <p>End offset: {{ activity.end_offset_days }}</p>
+
+        <div class="activity-tags">
+            <strong>Tags:</strong>
+
+            <span
+                v-for="activityTag in getActivityTags(activity.template_activity_id)"
+                :key="activityTag.template_activity_tag_id"
+                class="tag-chip"
+            >
+                {{ getTagName(activityTag.tag) }}
+            </span>
+        </div>
+
+        <div class="assign-tag">
+            <select v-model="selectedTags[activity.template_activity_id]">
+                <option disabled value="">Select tag</option>
+                <option
+                v-for="tag in tags"
+                :key="tag.tag_id"
+                :value="tag.tag_id"
+                >
+                {{ tag.tag_name }}
+                </option>
+            </select>
+
+            <button
+                type="button"
+                @click="assignTagToActivity(activity.template_activity_id)"
+            >
+                Add Tag
+            </button>
+        </div>
       </article>
     </section>
   </main>
@@ -73,6 +124,11 @@ const templates = ref([])
 const activities = ref([])
 const loading = ref(false)
 const error = ref('')
+
+const tags = ref([])
+const activityTags = ref([])
+const newTagName = ref('')
+const selectedTags = reactive({})
 
 const form = reactive({
   template: '',
@@ -130,9 +186,92 @@ async function createActivity() {
   }
 }
 
+async function fetchTags() {
+  try {
+    const response = await api.get('/tags/', {
+      requiresAuth: true,
+    })
+
+    tags.value = response.data
+  } catch (err) {
+    error.value = 'Could not load tags.'
+  }
+}
+
+async function fetchActivityTags() {
+  try {
+    const response = await api.get('/template-activity-tags/', {
+      requiresAuth: true,
+    })
+
+    activityTags.value = response.data
+  } catch (err) {
+    error.value = 'Could not load activity tags.'
+  }
+}
+
+async function createTag() {
+  if (!newTagName.value) {
+    return
+  }
+
+  try {
+    await api.post(
+      '/tags/',
+      { tag_name: newTagName.value },
+      { requiresAuth: true },
+    )
+
+    newTagName.value = ''
+    await fetchTags()
+  } catch (err) {
+    error.value = 'Could not create tag.'
+  }
+}
+
+async function assignTagToActivity(activityId) {
+  const tagId = selectedTags[activityId]
+
+  if (!tagId) {
+    return
+  }
+
+  try {
+    await api.post(
+      '/template-activity-tags/',
+      {
+        template_activity: activityId,
+        tag: tagId,
+      },
+      { requiresAuth: true },
+    )
+
+    selectedTags[activityId] = ''
+    await fetchActivityTags()
+  } catch (err) {
+    error.value = 'Could not assign tag to activity.'
+  }
+}
+
+function getActivityTags(activityId) {
+  return activityTags.value.filter(
+    (item) => item.template_activity === activityId
+  )
+}
+
+function getTagName(tagId) {
+  const tag = tags.value.find(
+    (item) => item.tag_id === tagId
+  )
+
+  return tag ? tag.tag_name : 'Tag'
+}
+
 onMounted(async () => {
   await fetchTemplates()
   await fetchActivities()
+  await fetchTags()
+  await fetchActivityTags()
 })
 </script>
 
@@ -184,6 +323,35 @@ button {
   border-radius: 10px;
   padding: 1rem;
   margin-top: 1rem;
+}
+
+.tag-form {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.activity-tags {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.8rem;
+}
+
+.tag-chip {
+  background: #eef2ff;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.assign-tag {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  align-items: center;
 }
 
 .error {
