@@ -9,6 +9,8 @@ import RegisterView from '../views/RegisterView.vue'
 import { useAuthStore } from '../stores/auth'
 import pinia from '../stores'
 import TemplatesView from '../views/TemplatesView.vue'
+import TemplateTasksView from '../views/TemplateTasksView.vue'
+import TemplateActivitiesView from '../views/TemplateActivitiesView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -54,6 +56,18 @@ const router = createRouter({
       path: '/templates',
       name: 'templates',
       component: TemplatesView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/template-tasks',
+      name: 'template-tasks',
+      component: TemplateTasksView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/template-activities',
+      name: 'template-activities',
+      component: TemplateActivitiesView,
       meta: { requiresAuth: true },
     },
     {
