@@ -76,3 +76,4 @@ class TemplateActivityTagSerializer(serializers.ModelSerializer):
         model = TemplateActivityTag
         fields = "__all__"
         read_only_fields = ["template_activity_tag_id"]
+

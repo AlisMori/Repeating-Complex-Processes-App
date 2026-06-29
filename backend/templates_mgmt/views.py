@@ -471,3 +471,5 @@ class TemplateActivityTagViewSet(viewsets.ModelViewSet):
         return TemplateActivityTag.objects.filter(
             template_activity__template__user=self.request.user
         )
+
+
