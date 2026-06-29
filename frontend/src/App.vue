@@ -1,90 +1,62 @@
 <script setup>
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterView } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from './stores/auth'
 
 const authStore = useAuthStore()
-const { authMessage, isAuthenticated, user } = storeToRefs(authStore)
+const { authMessage } = storeToRefs(authStore)
 </script>
 
 <template>
-  <div class="app-shell">
-    <header class="app-header">
-      <div>
-        <h1>Authentication Test App</h1>
-        <p>Temporary Vue frontend for validating the Django REST auth flow in the browser.</p>
-      </div>
-
-      <div class="session-summary">
-        <div><strong>Authenticated:</strong> {{ isAuthenticated ? 'Yes' : 'No' }}</div>
-        <div><strong>User:</strong> {{ user?.username || 'None' }}</div>
-      </div>
-
-      <nav>
-        <RouterLink to="/">Home</RouterLink>
-        <RouterLink v-if="!isAuthenticated" to="/auth/login">Login</RouterLink>
-        <RouterLink v-if="!isAuthenticated" to="/auth/register">Register</RouterLink>
-        <RouterLink v-if="!isAuthenticated" to="/auth/password-reset">Forgot Password</RouterLink>
-        <RouterLink v-if="isAuthenticated" to="/dashboard">Dashboard</RouterLink>
-      </nav>
-    </header>
-
-    <div v-if="authMessage" class="message info">
-      <p>{{ authMessage }}</p>
-      <button type="button" @click="authStore.clearAuthMessage()">Dismiss</button>
-    </div>
-
-    <RouterView />
+  <div v-if="authMessage" class="auth-message-banner" role="alert">
+    <p>{{ authMessage }}</p>
+    <button type="button" @click="authStore.clearAuthMessage()">Dismiss</button>
   </div>
+  <RouterView />
 </template>
 
-<style scoped>
-.app-shell {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 1.5rem;
+<style>
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
 }
 
-.app-header {
-  display: grid;
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-
-nav {
+#app {
+  min-height: 100vh;
   width: 100%;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: center;
 }
 
-nav a.router-link-exact-active {
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-nav a.router-link-exact-active:hover {
-  background-color: transparent;
-}
-
-nav a {
-  display: inline-block;
-}
-
-.session-summary {
-  display: grid;
-  gap: 0.25rem;
-}
-
-.message {
+.auth-message-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.75rem 1rem;
-  border: 1px solid #bfd2e8;
-  background: #eef5fc;
-  margin-bottom: 1.5rem;
+  padding: 10px 20px;
+  background: #EFF6FF;
+  border-bottom: 1px solid #BFDBFE;
+  font-size: 13px;
+  color: #1E40AF;
+}
+
+.auth-message-banner p {
+  margin: 0;
+}
+
+.auth-message-banner button {
+  background: none;
+  border: 1px solid #BFDBFE;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: #1E40AF;
+  cursor: pointer;
+  font-family: 'Inter', sans-serif;
+  flex-shrink: 0;
 }
 </style>
