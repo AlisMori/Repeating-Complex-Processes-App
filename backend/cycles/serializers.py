@@ -17,7 +17,7 @@ class CycleInstanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleInstance
         fields = "__all__"
-        read_only_fields = ["cycle_id", "user", "created_at"]
+        read_only_fields = ["cycle_id", "user", "status", "created_at"]
 
 
 class CycleTaskSerializer(serializers.ModelSerializer):
