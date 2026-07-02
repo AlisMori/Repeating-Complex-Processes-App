@@ -3,6 +3,7 @@ from datetime import date
 from django.db import transaction
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import APIException
 from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 
@@ -18,7 +19,6 @@ from core.permissions import (
 from templates_mgmt.models import Template
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .services import generate_cycle_runtime_records
-
 from .dependency_engine import (
     DependencyConflict,
     apply_task_shift,
@@ -27,13 +27,29 @@ from .dependency_engine import (
     preview_task_shift,
     would_create_cycle,
 )
-
+from .task_status_engine import (
+    ALLOWED_TRANSITIONS,
+    CycleNotRunning,
+    InvalidStatusTransition,
+    assert_cycle_is_running,
+    maybe_complete_cycle,
+    validate_status_transition,
+)
 from .serializers import (
     CycleActivitySerializer,
     CycleInstanceSerializer,
     CycleTaskSerializer,
     TaskDependencySerializer,
 )
+
+
+class CycleFrozen(APIException):
+    # Design Doc, API-02: "422 cycle not running" for the shift endpoint,
+    # applied the same way everywhere a cycle's contents can be edited,
+    # not just on shift.
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_code = "cycle_not_running"
+
 
 class CycleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = CycleInstanceSerializer
@@ -57,6 +73,8 @@ class CycleInstanceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def shut_down(self, request, pk=None):
         cycle = self.get_object()
+        if cycle.status == "shut_down":
+            return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
         cycle.status = "shut_down"
         cycle.save(update_fields=["status"])
         return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
@@ -90,6 +108,43 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         ).values("pk")
         return CycleTask.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
 
+    def perform_update(self, serializer):
+        # Module 9, FR-6.1/FR-6.4. Status is the only field this
+        # serializer allows through, everything else is read-only, so
+        # this only ever needs to check the transition itself.
+        cycle_task = serializer.instance
+        new_status = serializer.validated_data.get("status", cycle_task.status)
+
+        try:
+            assert_cycle_is_running(cycle_task.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
+
+        try:
+            validate_status_transition(cycle_task, new_status)
+        except InvalidStatusTransition as exc:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"status": [exc.message]})
+
+        updated = serializer.save()
+
+        if updated.status in ("completed", "skipped"):
+            maybe_complete_cycle(updated.cycle)
+
+    @action(detail=True, methods=["get"])
+    def available_statuses(self, request, pk=None):
+        # Lets the frontend show exactly the right buttons for a task's
+        # current state without hardcoding the transition map client-side.
+        cycle_task = self.get_object()
+        return Response(
+            {
+                "current_status": cycle_task.status,
+                "available_statuses": sorted(ALLOWED_TRANSITIONS.get(cycle_task.status, set())),
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def _parse_shift_input(self, request):
         data = request.data
         delay_days = data.get("delay_days")
@@ -110,6 +165,10 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def shift_preview(self, request, pk=None):
         cycle_task = self.get_object()
+        try:
+            assert_cycle_is_running(cycle_task.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
         parsed, error_response = self._parse_shift_input(request)
         if error_response:
             return error_response
@@ -119,6 +178,10 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def shift(self, request, pk=None):
         cycle_task = self.get_object()
+        try:
+            assert_cycle_is_running(cycle_task.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
         parsed, error_response = self._parse_shift_input(request)
         if error_response:
             return error_response
@@ -160,6 +223,15 @@ class CycleActivityViewSet(viewsets.ModelViewSet):
             owned_cycles_q(self.request.user)
         ).values("pk")
         return CycleActivity.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
+
+    def perform_update(self, serializer):
+        # Only the dates are writable here (see CycleActivitySerializer),
+        # but a frozen cycle still needs to block those too.
+        try:
+            assert_cycle_is_running(serializer.instance.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
+        serializer.save()
 
 
 class TaskDependencyViewSet(viewsets.ModelViewSet):
