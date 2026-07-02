@@ -1,0 +1,195 @@
+from datetime import date
+
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from accounts.models import User
+from templates_mgmt.models import Template, TemplateTask
+from cycles.models import CycleInstance, CycleTask, TaskDependency
+
+
+class DependencyRecalculationEngineTests(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="testuser",
+            email="test@test.com",
+            password="test123"
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.template = Template.objects.create(
+            user=self.user,
+            template_name="Onboarding Template",
+            description="Testing"
+        )
+
+        # A -> B -> C chain, plus a fixed task D depending on A too,
+        # so A has two direct dependents (B and D), the max allowed.
+        self.task_a = TemplateTask.objects.create(
+            template=self.template, task_name="A", day_offset=0, duration_days=2
+        )
+        self.task_b = TemplateTask.objects.create(
+            template=self.template, task_name="B", day_offset=2, duration_days=3
+        )
+        self.task_c = TemplateTask.objects.create(
+            template=self.template, task_name="C", day_offset=5, duration_days=1
+        )
+        self.task_d = TemplateTask.objects.create(
+            template=self.template, task_name="D", day_offset=2, duration_days=1,
+            is_fixed_date=True
+        )
+
+        TaskDependency.objects.create(task=self.task_b, depends_on_task=self.task_a)
+        TaskDependency.objects.create(task=self.task_c, depends_on_task=self.task_b)
+        TaskDependency.objects.create(task=self.task_d, depends_on_task=self.task_a)
+
+        self.cycle = CycleInstance.objects.create(
+            user=self.user,
+            template=self.template,
+            cycle_name="June Cohort",
+            start_date=date(2026, 7, 1)
+        )
+
+        self.cycle_task_a = CycleTask.objects.create(
+            cycle=self.cycle, template_task=self.task_a, task_name="A",
+            calculated_start_date=date(2026, 7, 1), calculated_end_date=date(2026, 7, 3)
+        )
+        self.cycle_task_b = CycleTask.objects.create(
+            cycle=self.cycle, template_task=self.task_b, task_name="B",
+            calculated_start_date=date(2026, 7, 3), calculated_end_date=date(2026, 7, 6)
+        )
+        self.cycle_task_c = CycleTask.objects.create(
+            cycle=self.cycle, template_task=self.task_c, task_name="C",
+            calculated_start_date=date(2026, 7, 6), calculated_end_date=date(2026, 7, 7)
+        )
+        self.cycle_task_d = CycleTask.objects.create(
+            cycle=self.cycle, template_task=self.task_d, task_name="D",
+            calculated_start_date=date(2026, 7, 3), calculated_end_date=date(2026, 7, 4),
+            is_fixed_date=True
+        )
+
+    # -- Fan-out capacity (FR-7.2) -----------------------------------------
+
+    def test_third_direct_dependent_on_same_task_is_rejected(self):
+        url = reverse("task-dependencies-list")
+        task_e = TemplateTask.objects.create(
+            template=self.template, task_name="E", day_offset=2, duration_days=1
+        )
+        response = self.client.post(url, {"task": task_e.template_task_id, "depends_on_task": self.task_a.template_task_id})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_circular_dependency_is_rejected(self):
+        url = reverse("task-dependencies-list")
+        response = self.client.post(url, {"task": self.task_a.template_task_id, "depends_on_task": self.task_c.template_task_id})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_dependent_task_offset_before_prerequisite_finish_is_rejected(self):
+        # C is offset 5, duration 1 (finishes day 6). A new task starting on
+        # day 3 cannot depend on C, it would need to start before C is done.
+        url = reverse("task-dependencies-list")
+        task_e = TemplateTask.objects.create(
+            template=self.template, task_name="E", day_offset=3, duration_days=1
+        )
+        response = self.client.post(url, {"task": task_e.template_task_id, "depends_on_task": self.task_c.template_task_id})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -- Single task shift ---------------------------------------------------
+
+    def test_single_shift_succeeds_when_gap_allows_it(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 1, "scope": "single"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle_task_c.refresh_from_db()
+        self.assertEqual(self.cycle_task_c.calculated_start_date, date(2026, 7, 7))
+
+    def test_single_shift_rejected_when_dependent_would_need_to_move(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "single"})
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["error"], "insufficient_gap")
+        self.cycle_task_a.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+
+    # -- Cascade shift ---------------------------------------------------
+
+    def test_cascade_shift_propagates_through_the_chain(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.cycle_task_a.refresh_from_db()
+        self.cycle_task_b.refresh_from_db()
+        self.cycle_task_c.refresh_from_db()
+
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 3))
+        self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
+        self.assertEqual(self.cycle_task_c.calculated_start_date, date(2026, 7, 8))
+
+    def test_cascade_shift_reports_warning_for_fixed_dependent_but_still_moves_the_rest(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(len(response.data["warnings"]), 1)
+        self.assertEqual(response.data["warnings"][0]["task_id"], self.cycle_task_d.cycle_task_id)
+
+        self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 3))
+
+        self.cycle_task_b.refresh_from_db()
+        self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
+
+    # -- Fixed task editing ---------------------------------------------------
+
+    def test_fixed_task_cannot_be_shifted_without_override(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_d.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 1, "scope": "single"})
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["error"], "fixed_task_locked")
+
+    def test_fixed_task_can_be_shifted_with_override(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_d.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 1, "scope": "single", "override_fixed": True})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 4))
+
+    # -- Direct date edits ---------------------------------------------------
+
+    def test_new_end_date_preserves_start_and_changes_duration(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(url, {"new_end_date": "2026-07-09", "scope": "single"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle_task_c.refresh_from_db()
+        self.assertEqual(self.cycle_task_c.calculated_start_date, date(2026, 7, 6))
+        self.assertEqual(self.cycle_task_c.calculated_end_date, date(2026, 7, 9))
+
+    def test_shift_rejects_more_than_one_input_field(self):
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(
+            url, {"delay_days": 1, "new_end_date": "2026-07-09", "scope": "single"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -- Preview (read-only) ---------------------------------------------------
+
+    def test_preview_does_not_write_and_reports_safe_days(self):
+        # A's direct dependents (B, D) both start the day A currently ends,
+        # so there is zero slack, even a 1 day delay already needs cascade.
+        url = reverse("cycle-tasks-shift-preview", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 1})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["max_safe_delay_days"], 0)
+        self.assertFalse(response.data["single_possible"])
+
+        self.cycle_task_a.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+
+    def test_task_dates_cannot_be_patched_directly(self):
+        url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.patch(url, {"calculated_start_date": "2026-08-01"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle_task_a.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))

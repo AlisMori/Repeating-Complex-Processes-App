@@ -3,7 +3,7 @@ from datetime import timedelta
 from .models import CycleActivity, CycleTask
 
 
-# ── Date calculation (7.4) ──────────────────────────────────────────────
+# Date calculation (7.4)
 # Templates store relative day offsets from the cycle start date (FR-4).
 # These two functions are the single source of truth for turning those
 # offsets into absolute calendar dates, so cascade recalculation (Module 8)
@@ -23,7 +23,7 @@ def calculate_activity_dates(cycle_start_date, start_offset_days, end_offset_day
     return start, end
 
 
-# ── Runtime record generation (7.2, 7.3) ────────────────────────────────
+# Runtime record generation (7.2, 7.3)
 
 def generate_cycle_tasks(cycle):
     """Copy every TEMPLATE_TASK on the cycle's template into runtime CYCLE_TASK records."""

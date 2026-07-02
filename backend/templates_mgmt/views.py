@@ -16,6 +16,7 @@ from core.permissions import (
     user_can_edit_template,
 )
 from cycles.models import CycleActivity, CycleInstance, CycleTask
+from cycles.dependency_engine import DependencyConflict, revalidate_task_offsets
 from .models import (
     Template,
     TemplateTask,
@@ -409,7 +410,13 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         template = serializer.validated_data.get("template", serializer.instance.template)
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
-        serializer.save()
+        task = serializer.save()
+        try:
+            revalidate_task_offsets(task)
+        except DependencyConflict as exc:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"day_offset": [exc.message]})
 
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):

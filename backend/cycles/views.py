@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date
 
 from django.db import transaction
 from rest_framework import permissions, status, viewsets
@@ -18,6 +18,16 @@ from core.permissions import (
 from templates_mgmt.models import Template
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .services import generate_cycle_runtime_records
+
+from .dependency_engine import (
+    DependencyConflict,
+    apply_task_shift,
+    assert_dependent_capacity,
+    check_offset_conflict,
+    preview_task_shift,
+    would_create_cycle,
+)
+
 from .serializers import (
     CycleActivitySerializer,
     CycleInstanceSerializer,
@@ -80,51 +90,64 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         ).values("pk")
         return CycleTask.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
 
-    @action(detail=True, methods=["post"])
-    def record_delay(self, request, pk=None):
-        cycle_task = self.get_object()
-        delay_days = int(request.data.get("delay_days", 0))
-        if delay_days < 0:
-            return Response(
-                {"delay_days": ["Delay days must be zero or greater."]},
+    def _parse_shift_input(self, request):
+        data = request.data
+        delay_days = data.get("delay_days")
+        new_start_date = data.get("new_start_date")
+        new_end_date = data.get("new_end_date")
+        if sum(v is not None for v in (delay_days, new_start_date, new_end_date)) != 1:
+            return None, Response(
+                {"non_field_errors": ["Provide exactly one of delay_days, new_start_date, new_end_date."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        cycle_task.calculated_start_date += timedelta(days=delay_days)
-        cycle_task.calculated_end_date += timedelta(days=delay_days)
-        if delay_days > 0:
-            cycle_task.status = "delayed"
-        cycle_task.save(
-            update_fields=["calculated_start_date", "calculated_end_date", "status"]
-        )
-        return Response(self.get_serializer(cycle_task).data, status=status.HTTP_200_OK)
+        parsed = {
+            "delay_days": int(delay_days) if delay_days is not None else None,
+            "new_start_date": date.fromisoformat(new_start_date) if new_start_date else None,
+            "new_end_date": date.fromisoformat(new_end_date) if new_end_date else None,
+        }
+        return parsed, None
 
     @action(detail=True, methods=["post"])
-    def recalculate_dependencies(self, request, pk=None):
+    def shift_preview(self, request, pk=None):
         cycle_task = self.get_object()
-        dependencies = TaskDependency.objects.filter(task=cycle_task.template_task)
-        latest_end_date = None
+        parsed, error_response = self._parse_shift_input(request)
+        if error_response:
+            return error_response
+        result = preview_task_shift(cycle_task, **parsed)
+        return Response(result, status=status.HTTP_200_OK)
 
-        for dependency in dependencies.select_related("depends_on_task"):
-            dependency_cycle_task = CycleTask.objects.filter(
-                cycle=cycle_task.cycle,
-                template_task=dependency.depends_on_task,
-            ).first()
-            if dependency_cycle_task is None:
-                continue
-            if latest_end_date is None or dependency_cycle_task.calculated_end_date > latest_end_date:
-                latest_end_date = dependency_cycle_task.calculated_end_date
+    @action(detail=True, methods=["post"])
+    def shift(self, request, pk=None):
+        cycle_task = self.get_object()
+        parsed, error_response = self._parse_shift_input(request)
+        if error_response:
+            return error_response
 
-        if latest_end_date is not None and latest_end_date > cycle_task.calculated_start_date:
-            cycle_task.calculated_start_date = latest_end_date
-            if cycle_task.calculated_end_date < latest_end_date:
-                cycle_task.calculated_end_date = latest_end_date
-            cycle_task.save(
-                update_fields=["calculated_start_date", "calculated_end_date"]
+        scope = request.data.get("scope", "single")
+        if scope not in ("single", "cascade"):
+            return Response(
+                {"scope": ["Must be 'single' or 'cascade'."]},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+        override_fixed = bool(request.data.get("override_fixed", False))
 
-        return Response(self.get_serializer(cycle_task).data, status=status.HTTP_200_OK)
+        try:
+            with transaction.atomic():
+                result = apply_task_shift(
+                    cycle_task, scope, override_fixed=override_fixed, **parsed
+                )
+        except DependencyConflict as exc:
+            return Response(exc.as_response_payload(), status=status.HTTP_409_CONFLICT)
 
+        return Response(
+            {
+                "cycle_task_id": cycle_task.pk,
+                "scope": scope,
+                "shifted_tasks": result["shifted"],
+                "warnings": result["warnings"],
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class CycleActivityViewSet(viewsets.ModelViewSet):
     serializer_class = CycleActivitySerializer
@@ -161,6 +184,7 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         task = serializer.validated_data["task"]
         depends_on_task = serializer.validated_data["depends_on_task"]
         self._validate_editable_dependency_tasks(task, depends_on_task)
+        self._validate_dependency_graph(task, depends_on_task)
         serializer.save()
 
     def perform_update(self, serializer):
@@ -170,6 +194,9 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
             serializer.instance.depends_on_task,
         )
         self._validate_editable_dependency_tasks(task, depends_on_task)
+        self._validate_dependency_graph(
+            task, depends_on_task, exclude_dependency_id=serializer.instance.pk
+        )
         serializer.save()
 
     def _validate_editable_dependency_tasks(self, task, depends_on_task):
@@ -180,3 +207,16 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("You do not have permission to modify this template.")
+
+    def _validate_dependency_graph(self, task, depends_on_task, exclude_dependency_id=None):
+        from rest_framework.exceptions import ValidationError
+
+        if would_create_cycle(task, depends_on_task):
+            raise ValidationError(
+                {"depends_on_task": ["This dependency would create a circular chain."]}
+            )
+        try:
+            check_offset_conflict(task, depends_on_task)
+            assert_dependent_capacity(depends_on_task, exclude_dependency_id=exclude_dependency_id)
+        except DependencyConflict as exc:
+            raise ValidationError({"depends_on_task": [exc.message]})

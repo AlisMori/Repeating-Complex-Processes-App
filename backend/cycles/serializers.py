@@ -49,7 +49,7 @@ class CycleTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleTask
         fields = "__all__"
-        read_only_fields = ["cycle_task_id"]
+        read_only_fields = ["cycle_task_id", "calculated_start_date", "calculated_end_date"]
 
 
 class CycleActivitySerializer(serializers.ModelSerializer):
