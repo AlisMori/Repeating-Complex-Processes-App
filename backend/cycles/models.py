@@ -37,7 +37,7 @@ class CycleTask(models.Model):
         ("in_progress", "In Progress"),
         ("completed", "Completed"),
         ("overdue", "Overdue"),
-        ("delayed", "Delayed"),
+        ("skipped", "Skipped"),
     ]
 
     cycle_task_id = models.AutoField(primary_key=True)

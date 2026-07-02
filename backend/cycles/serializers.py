@@ -49,7 +49,21 @@ class CycleTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleTask
         fields = "__all__"
-        read_only_fields = ["cycle_task_id"]
+        # Only status is writable here (Module 9, FR-6.1). Dates go
+        # through cycle-tasks/{id}/shift/ (Module 8, FR-6.5), everything
+        # else is fixed at creation time by the template it came from.
+        read_only_fields = [
+            "cycle_task_id",
+            "cycle",
+            "template_task",
+            "task_name",
+            "calculated_start_date",
+            "calculated_end_date",
+            "is_mandatory",
+            "is_fixed_date",
+            "reminder_lead_days",
+            "note_text",
+        ]
 
 
 class CycleActivitySerializer(serializers.ModelSerializer):
@@ -89,7 +103,16 @@ class CycleActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleActivity
         fields = "__all__"
-        read_only_fields = ["cycle_activity_id"]
+        # Only the dates are writable here, no engine involved, activities
+        # don't participate in dependency recalculation. Everything else
+        # is fixed at creation time by the template it came from.
+        read_only_fields = [
+            "cycle_activity_id",
+            "cycle",
+            "template_activity",
+            "activity_name",
+            "note_text",
+        ]
 
 
 class TaskDependencySerializer(serializers.ModelSerializer):
