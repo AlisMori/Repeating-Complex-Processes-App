@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import transaction
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
@@ -16,13 +17,13 @@ from core.permissions import (
 )
 from templates_mgmt.models import Template
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
+from .services import generate_cycle_runtime_records
 from .serializers import (
     CycleActivitySerializer,
     CycleInstanceSerializer,
     CycleTaskSerializer,
     TaskDependencySerializer,
 )
-
 
 class CycleInstanceViewSet(viewsets.ModelViewSet):
     serializer_class = CycleInstanceSerializer
@@ -34,7 +35,14 @@ class CycleInstanceViewSet(viewsets.ModelViewSet):
         return CycleInstance.objects.filter(owned_cycles_q(self.request.user)).distinct()
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        # FR-4: creating a cycle instance must also generate runtime copies of
+        # every task and activity on the chosen template, with absolute dates
+        # calculated from the cycle's start date (7.1, 7.2, 7.3, 7.4). Wrapped
+        # in a transaction so a partial failure never leaves an orphaned cycle
+        # with no runtime records.
+        with transaction.atomic():
+            cycle = serializer.save(user=self.request.user)
+            generate_cycle_runtime_records(cycle)
 
     @action(detail=True, methods=["post"])
     def shut_down(self, request, pk=None):
