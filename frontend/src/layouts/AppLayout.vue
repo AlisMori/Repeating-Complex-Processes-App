@@ -9,11 +9,14 @@ import { ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { useOnboardingStore } from '@/stores/onboarding'
 import LogoIcon from '@/components/ui/LogoIcon.vue'
+import OnboardingTour from '@/components/ui/OnboardingTour.vue'
 
 const authStore = useAuthStore()
 const { user } = storeToRefs(authStore)
 const router = useRouter()
+const onboardingStore = useOnboardingStore()
 
 const userMenuOpen = ref(false)
 
@@ -30,20 +33,28 @@ async function logout() {
   router.push({ name: 'login' })
 }
 
+function openHelp() {
+  closeUserMenu()
+  onboardingStore.startTour('sidebar')
+}
+
 const navItems = [
   {
     label: 'Dashboard',
     name: 'dashboard',
+    tourKey: 'dashboard',
     icon: `<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>`,
   },
   {
     label: 'Cycles',
     name: 'cycles',
+    tourKey: 'cycles',
     icon: `<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>`,
   },
   {
     label: 'Templates',
     name: 'templates',
+    tourKey: 'templates',
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>`,
   },
 ]
@@ -56,7 +67,7 @@ const navItems = [
     <aside class="sidebar">
 
       <!-- Logo -->
-      <div class="sidebar-logo">
+      <div class="sidebar-logo" data-tour="logo">
         <LogoIcon :size="32" />
       </div>
 
@@ -70,6 +81,7 @@ const navItems = [
           :to="{ name: item.name }"
           class="nav-item"
           active-class="nav-item-active"
+          :data-tour="item.tourKey"
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" v-html="item.icon"></svg>
           <span class="nav-label">{{ item.label }}</span>
@@ -83,6 +95,13 @@ const navItems = [
           </svg>
           <span class="nav-label">Account Settings</span>
         </RouterLink>
+
+        <button type="button" class="nav-item nav-item-button" @click="openHelp">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span class="nav-label">Help</span>
+        </button>
       </nav>
 
       <!-- User row with dropdown -->
@@ -101,6 +120,12 @@ const navItems = [
               </svg>
               Account Settings
             </RouterLink>
+            <button type="button" class="dropdown-item" @click="openHelp">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Replay tour
+            </button>
             <button type="button" class="dropdown-item dropdown-logout" @click="logout">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
@@ -111,7 +136,7 @@ const navItems = [
         </Transition>
 
         <!-- User row -->
-        <button type="button" class="user-row" @click.stop="toggleUserMenu">
+        <button type="button" class="user-row" data-tour="user-menu" @click.stop="toggleUserMenu">
           <div class="user-avatar">
             {{ (user?.first_name?.[0] || user?.username?.[0] || '?').toUpperCase() }}{{ (user?.last_name?.[0] || '').toUpperCase() }}
           </div>
@@ -141,6 +166,9 @@ const navItems = [
       </main>
 
     </div>
+
+    <!-- ONBOARDING TOUR -->
+    <OnboardingTour />
 
   </div>
 </template>
@@ -211,6 +239,15 @@ const navItems = [
   background: var(--violet-bg) !important;
   color: var(--violet) !important;
   font-weight: 500;
+}
+
+.nav-item-button {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-main);
 }
 
 .nav-icon {
