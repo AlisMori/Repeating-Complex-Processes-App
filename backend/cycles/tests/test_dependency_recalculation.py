@@ -193,3 +193,39 @@ class DependencyRecalculationEngineTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.cycle_task_a.refresh_from_db()
         self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+
+    # -- Backward shifts and multi-prerequisite tasks ------------------------
+
+    def test_backward_shift_rejected_if_it_precedes_own_prerequisite(self):
+        # B depends on A (A ends 7/3). Pulling B's start back to 7/2 would
+        # put it before A finishes, forward is always safe, backward isn't.
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_b.cycle_task_id])
+        response = self.client.post(url, {"new_start_date": "2026-07-02", "scope": "single"})
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["error"], "upstream_conflict")
+        self.cycle_task_b.refresh_from_db()
+        self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 3))
+
+    def test_cascade_respects_dependent_with_two_prerequisites(self):
+        # E depends on both B (ends 7/6) and D (ends 7/4). Delaying D alone
+        # should NOT pull E earlier than B still requires.
+        task_e = TemplateTask.objects.create(
+            template=self.template, task_name="E", day_offset=4, duration_days=1
+        )
+        TaskDependency.objects.create(task=task_e, depends_on_task=self.task_b)
+        TaskDependency.objects.create(task=task_e, depends_on_task=self.task_d)
+        cycle_task_e = CycleTask.objects.create(
+            cycle=self.cycle, template_task=task_e, task_name="E",
+            calculated_start_date=date(2026, 7, 6), calculated_end_date=date(2026, 7, 7)
+        )
+
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_d.cycle_task_id])
+        response = self.client.post(
+            url, {"delay_days": 1, "scope": "cascade", "override_fixed": True}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        cycle_task_e.refresh_from_db()
+        # D's new end is 7/5, but B still ends 7/6, so E must stay at 7/6,
+        # not get pulled in to match D's later-but-still-earlier end date.
+        self.assertEqual(cycle_task_e.calculated_start_date, date(2026, 7, 6))

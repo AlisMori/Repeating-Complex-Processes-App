@@ -5,7 +5,7 @@ from .models import CycleTask, TaskDependency
 MAX_DIRECT_DEPENDENTS = 2
 
 
-# Errors (Module 8)
+# === Errors (Module 8) ===================================================
 # Raised by apply_task_shift and caught in views.py to build the 409
 # conflict payloads described in the Design Doc (API-02). Each carries
 # enough structured data for the frontend to show a concrete message
@@ -27,7 +27,7 @@ class DependencyConflict(Exception):
         return payload
 
 
-# Dependency graph helpers
+# === Dependency graph helpers ============================================
 # TaskDependency.task is the dependent (downstream), depends_on_task is the
 # prerequisite (upstream). template_task.dependent_tasks therefore gives the
 # TEMPLATE_TASKs that directly depend on template_task (its direct downstream).
@@ -43,6 +43,24 @@ def get_direct_dependent_cycle_tasks(cycle, template_task):
     if not dependent_ids:
         return CycleTask.objects.none()
     return CycleTask.objects.filter(cycle=cycle, template_task_id__in=dependent_ids)
+
+
+def get_prerequisite_cycle_tasks(cycle, template_task, exclude_cycle_task_id=None):
+    """CYCLE_TASKs in this cycle that template_task directly depends on.
+
+    Reverse direction of get_direct_dependent_cycle_tasks. A task can have
+    more than one prerequisite (no cap on this side, only fan-out is
+    capped), so this always returns a queryset, never assumes just one.
+    """
+    prerequisite_ids = [
+        dep.depends_on_task_id for dep in template_task.dependencies.all()
+    ]
+    if not prerequisite_ids:
+        return CycleTask.objects.none()
+    queryset = CycleTask.objects.filter(cycle=cycle, template_task_id__in=prerequisite_ids)
+    if exclude_cycle_task_id is not None:
+        queryset = queryset.exclude(pk=exclude_cycle_task_id)
+    return queryset
 
 
 def would_create_cycle(task, depends_on_task, visited=None):
@@ -135,7 +153,7 @@ def revalidate_task_offsets(template_task):
         check_offset_conflict(dependency.task, template_task)
 
 
-# Date recalculation (FR-6.6, FR-7)
+# === Date recalculation (FR-6.6, FR-7) ====================================
 
 def recalculate_shifted_dates(cycle_task, delay_days=None, new_start_date=None, new_end_date=None):
     """Recompute one task's own start/end pair from exactly one edit type.
@@ -173,6 +191,29 @@ def check_single_task_gap(cycle_task, new_end_date):
     return True, None
 
 
+def check_upstream_feasibility(cycle_task, new_start_date):
+    """A task's new start can never fall before any of its own
+    prerequisites' current end date in this cycle.
+
+    Only needed for backward moves or direct start/end edits, a forward
+    delay is always safe since it only ever moves further past whatever
+    already finished. Checked against every prerequisite, not just one,
+    since a task can depend on more than one upstream task (fan-out is
+    capped at 2, but a task's own number of prerequisites isn't).
+    """
+    for prerequisite in get_prerequisite_cycle_tasks(cycle_task.cycle, cycle_task.template_task):
+        if new_start_date < prerequisite.calculated_end_date:
+            raise DependencyConflict(
+                error="upstream_conflict",
+                message=(
+                    f"Task '{cycle_task.task_name}' cannot start on {new_start_date} "
+                    f"because it depends on '{prerequisite.task_name}', which does not "
+                    f"finish until {prerequisite.calculated_end_date}."
+                ),
+                task_id=prerequisite.pk,
+            )
+
+
 def max_safe_delay_days(cycle_task):
     """Largest delay (in days) that needs no dependent to move. None if no dependents."""
     dependents = get_direct_dependent_cycle_tasks(cycle_task.cycle, cycle_task.template_task)
@@ -182,7 +223,7 @@ def max_safe_delay_days(cycle_task):
     return max(min(gaps), 0)
 
 
-# Cascade planning and application (Module 8 core)
+# === Cascade planning and application (Module 8 core) =====================
 
 def plan_cascade(cycle_task, new_end_date, visited_ids=None):
     """Read-only downstream walk. Returns a list of step dicts, one per
@@ -199,8 +240,20 @@ def plan_cascade(cycle_task, new_end_date, visited_ids=None):
             continue
         visited_ids.add(dependent.pk)
 
-        if dependent.calculated_start_date >= new_end_date:
-            # Already clear of the new upstream end date, nothing to do.
+        # A dependent can have more than one prerequisite. new_end_date only
+        # reflects the branch we're walking down, if another prerequisite of
+        # this dependent finishes even later, that has to win, otherwise
+        # we'd shift the dependent to a date that's still invalid.
+        other_prerequisite_ends = [
+            p.calculated_end_date
+            for p in get_prerequisite_cycle_tasks(
+                dependent.cycle, dependent.template_task, exclude_cycle_task_id=cycle_task.pk
+            )
+        ]
+        required_start = max([new_end_date] + other_prerequisite_ends)
+
+        if dependent.calculated_start_date >= required_start:
+            # Already clear of every prerequisite, nothing to do.
             continue
 
         if dependent.is_fixed_date:
@@ -213,7 +266,7 @@ def plan_cascade(cycle_task, new_end_date, visited_ids=None):
             continue
 
         duration = dependent.calculated_end_date - dependent.calculated_start_date
-        planned_start = new_end_date
+        planned_start = required_start
         planned_end = planned_start + duration
         steps.append({
             "cycle_task_id": dependent.pk,
@@ -234,6 +287,12 @@ def preview_task_shift(cycle_task, delay_days=None, new_start_date=None, new_end
     new_start, new_end = recalculate_shifted_dates(
         cycle_task, delay_days=delay_days, new_start_date=new_start_date, new_end_date=new_end_date
     )
+    try:
+        check_upstream_feasibility(cycle_task, new_start)
+        upstream_conflict = None
+    except DependencyConflict as exc:
+        upstream_conflict = exc.as_response_payload()
+
     single_ok, blocking = check_single_task_gap(cycle_task, new_end)
     cascade_plan = plan_cascade(cycle_task, new_end)
 
@@ -242,9 +301,11 @@ def preview_task_shift(cycle_task, delay_days=None, new_start_date=None, new_end
         "planned_start_date": new_start,
         "planned_end_date": new_end,
         "max_safe_delay_days": max_safe_delay_days(cycle_task),
-        "single_possible": single_ok,
+        "upstream_conflict": upstream_conflict,
+        "single_possible": single_ok and upstream_conflict is None,
         "single_blocking_task": blocking.task_name if blocking else None,
-        "cascade_possible": any(step["shiftable"] for step in cascade_plan) or not cascade_plan,
+        "cascade_possible": (any(step["shiftable"] for step in cascade_plan) or not cascade_plan)
+        and upstream_conflict is None,
         "cascade_plan": cascade_plan,
     }
 
@@ -282,6 +343,7 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
     new_start, new_end = recalculate_shifted_dates(
         cycle_task, delay_days=delay_days, new_start_date=new_start_date, new_end_date=new_end_date
     )
+    check_upstream_feasibility(cycle_task, new_start)
 
     shifted = [{
         "cycle_task_id": cycle_task.pk,
