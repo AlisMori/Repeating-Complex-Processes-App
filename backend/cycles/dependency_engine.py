@@ -5,7 +5,7 @@ from .models import CycleTask, TaskDependency
 MAX_DIRECT_DEPENDENTS = 2
 
 
-# === Errors (Module 8) ===================================================
+# Errors (Module 8)
 # Raised by apply_task_shift and caught in views.py to build the 409
 # conflict payloads described in the Design Doc (API-02). Each carries
 # enough structured data for the frontend to show a concrete message
@@ -27,7 +27,7 @@ class DependencyConflict(Exception):
         return payload
 
 
-# === Dependency graph helpers ============================================
+# Dependency graph helpers
 # TaskDependency.task is the dependent (downstream), depends_on_task is the
 # prerequisite (upstream). template_task.dependent_tasks therefore gives the
 # TEMPLATE_TASKs that directly depend on template_task (its direct downstream).
@@ -139,6 +139,37 @@ def check_offset_conflict(task, depends_on_task):
         )
 
 
+def copy_dependencies(source_template, task_id_map, validate_offsets=False, skip_task_ids=None):
+    """Rebuild every TaskDependency edge from source_template onto the
+    tasks in task_id_map (old TemplateTask.pk -> new TemplateTask
+    instance). Used everywhere a template gets copied (new version,
+    duplicate, share), none of these copied dependency edges before this,
+    every one silently dropped them.
+
+    validate_offsets=True re-checks check_offset_conflict on each copied
+    edge, needed when the copy also allows editing offsets (template
+    versioning with task overrides). Skip it for a byte-for-byte copy
+    (duplicate, share) where offsets never change, nothing to check.
+
+    skip_task_ids excludes tasks whose dependencies are being set
+    explicitly elsewhere instead of copied (versioning's depends_on
+    override), so this only fills in the ones left untouched.
+    """
+    skip_task_ids = skip_task_ids or set()
+    for dependency in TaskDependency.objects.filter(
+        task__template=source_template
+    ).select_related("task", "depends_on_task"):
+        if dependency.task.template_task_id in skip_task_ids:
+            continue
+        new_task = task_id_map.get(dependency.task.template_task_id)
+        new_depends_on = task_id_map.get(dependency.depends_on_task.template_task_id)
+        if new_task is None or new_depends_on is None:
+            continue
+        if validate_offsets:
+            check_offset_conflict(new_task, new_depends_on)
+        TaskDependency.objects.create(task=new_task, depends_on_task=new_depends_on)
+
+
 def revalidate_task_offsets(template_task):
     """Call after a TemplateTask's day_offset/duration_days changes. Re-runs
     check_offset_conflict on every existing edge touching this task, in
@@ -153,7 +184,7 @@ def revalidate_task_offsets(template_task):
         check_offset_conflict(dependency.task, template_task)
 
 
-# === Date recalculation (FR-6.6, FR-7) ====================================
+# Date recalculation (FR-6.6, FR-7)
 
 def recalculate_shifted_dates(cycle_task, delay_days=None, new_start_date=None, new_end_date=None):
     """Recompute one task's own start/end pair from exactly one edit type.
@@ -223,7 +254,7 @@ def max_safe_delay_days(cycle_task):
     return max(min(gaps), 0)
 
 
-# === Cascade planning and application (Module 8 core) =====================
+# Cascade planning and application (Module 8 core)
 
 def plan_cascade(cycle_task, new_end_date, visited_ids=None):
     """Read-only downstream walk. Returns a list of step dicts, one per
