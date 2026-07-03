@@ -493,9 +493,10 @@ class CycleOwnershipTests(JwtAuthMixin, APITestCase):
 
         response = self.client.post(
             reverse(
-                "cycle-tasks-recalculate-dependencies",
+                "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.other_cycle_task.cycle_task_id],
             ),
+            {"delay_days": 1, "scope": "single"},  # body now required by the new endpoint
             format="json",
         )
 
@@ -506,15 +507,17 @@ class CycleOwnershipTests(JwtAuthMixin, APITestCase):
 
         response = self.client.post(
             reverse(
-                "cycle-tasks-recalculate-dependencies",
+                "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.user_cycle_task.cycle_task_id],
             ),
+            {"delay_days": 1, "scope": "single"},  # body now required by the new endpoint
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user_cycle_task.refresh_from_db()
-        self.assertEqual(self.user_cycle_task.calculated_start_date, date(2026, 6, 4))
+        self.assertEqual(self.user_cycle_task.calculated_start_date, date(2026, 6, 2))
+        self.assertEqual(self.user_cycle_task.calculated_end_date, date(2026, 6, 4))
 
 
 class FullAuthorizationFlowTests(JwtAuthMixin, APITestCase):
@@ -761,44 +764,51 @@ class FullAuthorizationFlowTests(JwtAuthMixin, APITestCase):
         self.assertEqual(collection_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(action_response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_user_b_cannot_update_delay_or_recalculate_user_a_runtime_task(self):
-        self.authenticate(self.user_b)
+        # record-delay and recalculate-dependencies endpoints were both removed
+        # and merged into shift/shift-preview (Module 8, Zhyldyz).
+        def test_user_b_cannot_update_delay_or_recalculate_user_a_runtime_task(self):
+            self.authenticate(self.user_b)
 
-        update_response = self.client.patch(
-            reverse("cycle-tasks-detail", args=[self.runtime_task_a.cycle_task_id]),
-            {"status": "completed"},
-            format="json",
-        )
-        delay_response = self.client.post(
-            reverse("cycle-tasks-record-delay", args=[self.runtime_task_a.cycle_task_id]),
-            {"delay_days": 2},
-            format="json",
-        )
-        recalculate_response = self.client.post(
-            reverse(
-                "cycle-tasks-recalculate-dependencies",
-                args=[self.runtime_task_a.cycle_task_id],
-            ),
-            format="json",
-        )
+            update_response = self.client.patch(
+                reverse("cycle-tasks-detail", args=[self.runtime_task_a.cycle_task_id]),
+                {"status": "completed"},
+                format="json",
+            )
+            shift_response = self.client.post(
+                reverse("cycle-tasks-shift", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-record-delay"
+                {"delay_days": 2, "scope": "single"},
+                format="json",
+            )
+            preview_response = self.client.post(
+                reverse("cycle-tasks-shift-preview", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-recalculate-dependencies"
+                {"delay_days": 2},
+                format="json",
+            )
 
-        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(delay_response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(recalculate_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(shift_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(preview_response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_owner_can_record_delay_on_owned_runtime_task(self):
-        self.authenticate(self.user_a)
+        # Renamed from test_owner_can_record_delay_on_owned_runtime_task. The
+        # new shift endpoint (Module 8, Zhyldyz) never sets status itself,
+        # that's handled separately by Runtime Task Management (Module 9),
+        # so the old status == "delayed" assertion was dropped.
+        def test_owner_can_shift_owned_runtime_task(self):
+            self.authenticate(self.user_a)
 
-        response = self.client.post(
-            reverse("cycle-tasks-record-delay", args=[self.runtime_task_a.cycle_task_id]),
-            {"delay_days": 2},
-            format="json",
-        )
+            response = self.client.post(
+                reverse("cycle-tasks-shift", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-record-delay"
+                {"delay_days": 2, "scope": "single"},
+                format="json",
+            )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.runtime_task_a.refresh_from_db()
-        self.assertEqual(self.runtime_task_a.calculated_start_date, date(2026, 6, 3))
-        self.assertEqual(self.runtime_task_a.status, "delayed")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.runtime_task_a.refresh_from_db()
+            self.assertEqual(self.runtime_task_a.calculated_start_date, date(2026, 6, 3))
+            self.assertEqual(self.runtime_task_a.calculated_end_date, date(2026, 6, 4))
 
 
 class TaskDependencyOwnershipTests(JwtAuthMixin, APITestCase):
