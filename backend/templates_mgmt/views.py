@@ -15,8 +15,17 @@ from core.permissions import (
     user_can_access_template,
     user_can_edit_template,
 )
-from cycles.models import CycleActivity, CycleInstance, CycleTask
-from cycles.dependency_engine import DependencyConflict, revalidate_task_offsets
+
+from cycles.models import CycleActivity, CycleInstance, CycleTask, TaskDependency
+from cycles.dependency_engine import (
+    DependencyConflict,
+    assert_dependent_capacity,
+    check_offset_conflict,
+    copy_dependencies,
+    revalidate_task_offsets,
+    would_create_cycle,
+)
+
 from .models import (
     Template,
     TemplateTask,
@@ -62,39 +71,6 @@ class TemplateViewSet(viewsets.ModelViewSet):
             defaults={"access_type": "owner"},
         )
 
-    @action(detail=True, methods=["post"])
-    def share(self, request, pk=None):
-        template = self.get_object()
-        if not user_can_edit_template(request.user, template):
-            raise PermissionDenied("You do not have permission to share this template.")
-
-        target_user_id = request.data.get("user_id")
-        if not target_user_id:
-            return Response(
-                {"user_id": ["This field is required."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            target_user = User.objects.get(pk=target_user_id)
-        except User.DoesNotExist:
-            return Response(
-                {"user_id": ["User not found."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        relation, _ = UserTemplate.objects.update_or_create(
-            user=target_user,
-            template=template,
-            defaults={"access_type": "shared"},
-        )
-        return Response(
-            {
-                "message": "Template shared successfully.",
-                "user_template_id": relation.user_template_id,
-            },
-            status=status.HTTP_200_OK,
-        )
 
     @action(detail=True, methods=["post"])
     def create_cycle(self, request, pk=None):
@@ -172,8 +148,20 @@ class TemplateViewSet(viewsets.ModelViewSet):
         ).data
         return Response(payload, status=status.HTTP_200_OK)
 
+
     def update(self, request, *args, **kwargs):
         original_template = self.get_object()
+
+        # Optional per-task overrides, keyed by the task's id on the
+        # version being edited. Any task not mentioned here just carries
+        # over unchanged, including its dependencies. New tasks (no
+        # template_task_id) are not handled here, that stays on
+        # template-tasks/ after the version exists.
+        task_overrides = {
+            item["template_task_id"]: item
+            for item in request.data.get("tasks", [])
+            if item.get("template_task_id")
+        }
 
         with transaction.atomic():
             original_template.is_current_version = False
@@ -196,18 +184,24 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 access_type="owner",
             )
 
+            # old TemplateTask.pk -> new TemplateTask instance, needed
+            # below to rebuild TaskDependency edges onto the new version.
+            task_id_map = {}
+
             for task in original_template.template_tasks.all():
-                TemplateTask.objects.create(
+                override = task_overrides.get(task.template_task_id, {})
+                new_task = TemplateTask.objects.create(
                     template=new_template,
-                    task_name=task.task_name,
-                    description=task.description,
-                    day_offset=task.day_offset,
-                    duration_days=task.duration_days,
-                    is_mandatory=task.is_mandatory,
-                    is_fixed_date=task.is_fixed_date,
-                    reminder_lead_days=task.reminder_lead_days,
-                    note_text=task.note_text,
+                    task_name=override.get("task_name", task.task_name),
+                    description=override.get("description", task.description),
+                    day_offset=override.get("day_offset", task.day_offset),
+                    duration_days=override.get("duration_days", task.duration_days),
+                    is_mandatory=override.get("is_mandatory", task.is_mandatory),
+                    is_fixed_date=override.get("is_fixed_date", task.is_fixed_date),
+                    reminder_lead_days=override.get("reminder_lead_days", task.reminder_lead_days),
+                    note_text=override.get("note_text", task.note_text),
                 )
+                task_id_map[task.template_task_id] = new_task
 
             for activity in original_template.template_activities.all():
                 TemplateActivity.objects.create(
@@ -218,6 +212,51 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     end_offset_days=activity.end_offset_days,
                     note_text=activity.note_text,
                 )
+
+            # A tasks[] item can optionally include "depends_on", a list of
+            # OLD template_task_id values (prerequisites, on this same
+            # version being edited). If present, it replaces that task's
+            # dependencies entirely, this is how a task's upstream can be
+            # set or changed as part of the edit, not just its offset. Any
+            # task without an explicit "depends_on" just keeps its old
+            # edges, copied via copy_dependencies below.
+            explicit_dependency_task_ids = {
+                old_id for old_id, item in task_overrides.items() if "depends_on" in item
+            }
+
+            copy_dependencies(
+                original_template,
+                task_id_map,
+                validate_offsets=True,
+                skip_task_ids=explicit_dependency_task_ids,
+            )
+
+            for old_id in explicit_dependency_task_ids:
+                new_task = task_id_map[old_id]
+                for prerequisite_old_id in task_overrides[old_id]["depends_on"]:
+                    if prerequisite_old_id not in task_id_map:
+                        from rest_framework.exceptions import ValidationError
+
+                        raise ValidationError(
+                            {"tasks": [f"depends_on references unknown template_task_id {prerequisite_old_id}."]}
+                        )
+                    new_depends_on = task_id_map[prerequisite_old_id]
+                    try:
+                        if would_create_cycle(new_task, new_depends_on):
+                            raise DependencyConflict(
+                                error="circular_dependency",
+                                message=(
+                                    f"Task '{new_task.task_name}' cannot depend on "
+                                    f"'{new_depends_on.task_name}', it would create a circular chain."
+                                ),
+                            )
+                        check_offset_conflict(new_task, new_depends_on)
+                        assert_dependent_capacity(new_depends_on)
+                    except DependencyConflict as exc:
+                        from rest_framework.exceptions import ValidationError
+
+                        raise ValidationError({"tasks": [exc.message]})
+                    TaskDependency.objects.create(task=new_task, depends_on_task=new_depends_on)
 
         return Response(
             {
@@ -289,6 +328,10 @@ class TemplateViewSet(viewsets.ModelViewSet):
                         template_activity=copied_activity,
                         tag=activity_tag.tag,
                     )
+            
+            # Straight copy, offsets never change here, so no need to
+            # re-validate them, just carry every edge across.
+            copy_dependencies(original_template, task_map)
 
         return Response(
             {
@@ -356,8 +399,10 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 access_type="shared",
             )
 
+            task_map = {}
+
             for task in original_template.template_tasks.all():
-                TemplateTask.objects.create(
+                copied_task = TemplateTask.objects.create(
                     template=shared_template,
                     task_name=task.task_name,
                     description=task.description,
@@ -368,6 +413,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     reminder_lead_days=task.reminder_lead_days,
                     note_text=task.note_text,
                 )
+                task_map[task.template_task_id] = copied_task
 
             for activity in original_template.template_activities.all():
                 TemplateActivity.objects.create(
@@ -378,6 +424,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     end_offset_days=activity.end_offset_days,
                     note_text=activity.note_text,
                 )
+
+            # Straight copy, same as duplicate(), no offset changes here.
+            copy_dependencies(original_template, task_map)
 
         return Response(
             {
