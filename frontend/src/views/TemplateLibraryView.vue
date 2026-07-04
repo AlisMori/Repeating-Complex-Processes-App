@@ -5,6 +5,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 
 const router = useRouter()
@@ -54,11 +55,12 @@ onMounted(() => {
   <AppLayout>
     <template #topbar>
       <span class="topbar-title">Template Library</span>
-      <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
-        <div class="search-box">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" placeholder="Search templates..." />
-        </div>
+      <div class="topbar-actions">
+        <SmartSearch
+          context="templates"
+          :default-scopes="['templates', 'tasks', 'activities', 'notes']"
+          placeholder="Search templates and notes..."
+        />
         <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('templates')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
@@ -148,11 +150,7 @@ onMounted(() => {
 
 <style scoped>
 .topbar-title { font-size: 15px; font-weight: 600; color: var(--text-primary); flex: 1; }
-
-.search-box { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-light); border-radius: 7px; padding: 7px 12px; background: var(--bg-page); width: 200px; }
-.search-box svg { width: 14px; height: 14px; stroke: var(--text-muted); flex-shrink: 0; }
-.search-box input { border: none; background: transparent; font-size: 13px; color: var(--text-primary); outline: none; width: 100%; font-family: var(--font-main); }
-.search-box input::placeholder { color: var(--text-muted); }
+.topbar-actions { margin-left: auto; display: flex; gap: 10px; align-items: center; min-width: 0; }
 
 .page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); transition: background var(--transition-fast), color var(--transition-fast); flex-shrink: 0; }
 .page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }

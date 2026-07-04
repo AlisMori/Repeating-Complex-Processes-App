@@ -16,10 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from core.search import SearchView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/auth/", include("accounts.urls")),
+    path("api/search/", SearchView.as_view(), name="smart-search"),
     path("api/", include("templates_mgmt.urls")),
     path("api/", include("cycles.urls")),
 ]

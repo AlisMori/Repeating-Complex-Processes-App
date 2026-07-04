@@ -5,6 +5,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 
 const router = useRouter()
@@ -105,7 +106,12 @@ onMounted(() => {
     <template #topbar>
       <span class="topbar-title">Dashboard</span>
       <span class="topbar-date">{{ new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</span>
-      <div style="margin-left: auto; display: flex; gap: 10px;">
+      <div class="topbar-actions">
+        <SmartSearch
+          context="dashboard"
+          :default-scopes="['cycles', 'tasks', 'activities']"
+          placeholder="Search dashboard items..."
+        />
         <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('dashboard')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
@@ -281,6 +287,7 @@ onMounted(() => {
 <style scoped>
 .topbar-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .topbar-date { font-size: 13px; color: var(--text-muted); }
+.topbar-actions { margin-left: auto; display: flex; gap: 10px; align-items: center; min-width: 0; }
 
 .page-help-btn {
   width: 34px; height: 34px;
