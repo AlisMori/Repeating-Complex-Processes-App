@@ -57,9 +57,9 @@ defineProps({
 .base-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* SIZES */
-.btn-sm { height: 32px; padding: 0 12px; font-size: 12.5px; }
-.btn-md { height: 40px; padding: 0 16px; font-size: 13.5px; }
-.btn-lg { height: 46px; padding: 0 20px; font-size: 14.5px; }
+.btn-sm { height: 32px; padding: 0 12px; font-size: 13.5px; }
+.btn-md { height: 40px; padding: 0 16px; font-size: 14.5px; }
+.btn-lg { height: 46px; padding: 0 20px; font-size: 15.5px; }
 
 /* FULL WIDTH */
 .btn-full { width: 100%; }

@@ -5,8 +5,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { useOnboardingStore } from '@/stores/onboarding'
 
 const router = useRouter()
+const onboardingStore = useOnboardingStore()
 
 // ── MOCK DATA (replace with API calls later) ──────────────
 const loading = ref(false)
@@ -86,6 +88,14 @@ function progressColor(pct) {
   if (pct >= 40) return '#7C3AED'
   return '#7C3AED'
 }
+
+onMounted(() => {
+  // Only auto-start the dashboard tour once the sidebar tour
+  // has already been seen, so they don't overlap on first login.
+  if (onboardingStore.hasCompleted('sidebar')) {
+    onboardingStore.maybeAutoStart('dashboard')
+  }
+})
 </script>
 
 <template>
@@ -96,6 +106,11 @@ function progressColor(pct) {
       <span class="topbar-title">Dashboard</span>
       <span class="topbar-date">{{ new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</span>
       <div style="margin-left: auto; display: flex; gap: 10px;">
+        <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('dashboard')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
         <BaseButton variant="primary" size="sm" @click="router.push({ name: 'cycle-create' })">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -109,7 +124,7 @@ function progressColor(pct) {
     <div class="dashboard">
 
       <!-- STAT CARDS -->
-      <div class="stats-row">
+      <div class="stats-row" data-tour="dash-stats">
         <div class="stat-card">
           <div class="stat-icon" style="background:#F5F3FF;">
             <svg viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -160,7 +175,7 @@ function progressColor(pct) {
       </div>
 
       <!-- OVERDUE ALERT -->
-      <div v-if="overdueCycles.length" class="alert-box">
+      <div v-if="overdueCycles.length" class="alert-box" data-tour="dash-alert">
         <svg viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
@@ -174,7 +189,7 @@ function progressColor(pct) {
       <div class="two-col">
 
         <!-- LEFT: RUNNING CYCLES -->
-        <div class="col-main">
+        <div class="col-main" data-tour="dash-cycles">
           <div class="section-header">
             <span class="section-title">Running cycles</span>
             <span class="section-link" @click="router.push({ name: 'cycles' })">View all →</span>
@@ -221,7 +236,7 @@ function progressColor(pct) {
         </div>
 
         <!-- RIGHT: UPCOMING + ACTIVITIES -->
-        <div class="col-side">
+        <div class="col-side" data-tour="dash-upcoming">
 
           <!-- Upcoming tasks -->
           <div class="section-header">
@@ -267,6 +282,20 @@ function progressColor(pct) {
 .topbar-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .topbar-date { font-size: 13px; color: var(--text-muted); }
 
+.page-help-btn {
+  width: 34px; height: 34px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  background: var(--white);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
+
 .dashboard { display: flex; flex-direction: column; gap: 20px; }
 
 /* STATS */
@@ -292,8 +321,8 @@ function progressColor(pct) {
 
 .stat-icon svg { width: 17px; height: 17px; }
 
-.stat-value { font-size: 22px; font-weight: 600; color: var(--text-primary); line-height: 1; margin-bottom: 2px; }
-.stat-label { font-size: 12px; color: var(--text-muted); }
+.stat-value { font-size: 25px; font-weight: 600; color: var(--text-primary); line-height: 1; margin-bottom: 2px; }
+.stat-label { font-size: 13px; color: var(--text-muted); }
 
 /* ALERT */
 .alert-box {
@@ -339,7 +368,7 @@ function progressColor(pct) {
 .cycle-name { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
 .cycle-meta { font-size: 12px; color: var(--text-muted); }
 
-.cycle-badge { font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 20px; flex-shrink: 0; }
+.cycle-badge { font-size: 12.5px; font-weight: 500; padding: 4px 11px; border-radius: 20px; flex-shrink: 0; }
 .badge-running { background: var(--success-bg); color: #15803D; }
 .badge-overdue { background: var(--danger-bg); color: #B91C1C; }
 
