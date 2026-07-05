@@ -443,11 +443,17 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
     search_fields = ["task_name", "description", "note_text"]
 
     def get_queryset(self):
-        return TemplateTask.objects.filter(
+        queryset = TemplateTask.objects.filter(
             template_id__in=Template.objects.filter(
                 accessible_templates_q(self.request.user)
             ).values("pk")
         ).distinct()
+
+        template_id = self.request.query_params.get("template")
+        if template_id:
+            queryset = queryset.filter(template_id=template_id)
+
+        return queryset
 
     def perform_create(self, serializer):
         template = serializer.validated_data["template"]
@@ -475,11 +481,17 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
     search_fields = ["activity_name", "description", "note_text"]
 
     def get_queryset(self):
-        return TemplateActivity.objects.filter(
+        queryset = TemplateActivity.objects.filter(
             template_id__in=Template.objects.filter(
                 accessible_templates_q(self.request.user)
             ).values("pk")
         ).distinct()
+
+        template_id = self.request.query_params.get("template")
+        if template_id:
+            queryset = queryset.filter(template_id=template_id)
+
+        return queryset
 
     def perform_create(self, serializer):
         template = serializer.validated_data["template"]
