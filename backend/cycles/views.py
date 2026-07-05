@@ -108,6 +108,18 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         ).values("pk")
         return CycleTask.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
 
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        cycle = serializer.validated_data["cycle"]
+
+        if cycle.user_id != self.request.user.id:
+            raise PermissionDenied(
+                "You do not have permission to attach a task to this cycle."
+            )
+
+        serializer.save()
+
     def perform_update(self, serializer):
         # Module 9, FR-6.1/FR-6.4. Status is the only field this
         # serializer allows through, everything else is read-only, so
@@ -131,7 +143,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
 
         if updated.status in ("completed", "skipped"):
             maybe_complete_cycle(updated.cycle)
-
+    
     @action(detail=True, methods=["get"])
     def available_statuses(self, request, pk=None):
         # Lets the frontend show exactly the right buttons for a task's
@@ -223,6 +235,18 @@ class CycleActivityViewSet(viewsets.ModelViewSet):
             owned_cycles_q(self.request.user)
         ).values("pk")
         return CycleActivity.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
+    
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        cycle = serializer.validated_data["cycle"]
+
+        if cycle.user_id != self.request.user.id:
+            raise PermissionDenied(
+                "You do not have permission to attach an activity to this cycle."
+            )
+
+        serializer.save()
 
     def perform_update(self, serializer):
         # Only the dates are writable here (see CycleActivitySerializer),

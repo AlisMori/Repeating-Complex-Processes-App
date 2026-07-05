@@ -92,7 +92,7 @@ class TemplateManagementTests(APITestCase):
             duration_days=1,
             is_mandatory=True,
             is_fixed_date=False,
-            reminder_lead_days=0,
+            reminder_lead_days=[0],
             note_text="Task note",
         )
 

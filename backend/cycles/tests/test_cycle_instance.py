@@ -33,7 +33,7 @@ class CycleInstanceEngineTests(APITestCase):
             duration_days=2,
             is_mandatory=True,
             is_fixed_date=False,
-            reminder_lead_days=1,
+            reminder_lead_days=[1],
             note_text="Send to legal for review first"
         )
 
@@ -44,7 +44,7 @@ class CycleInstanceEngineTests(APITestCase):
             duration_days=None,
             is_mandatory=False,
             is_fixed_date=True,
-            reminder_lead_days=None,
+            reminder_lead_days=[],
             note_text=None
         )
 
@@ -154,13 +154,13 @@ class CycleInstanceEngineTests(APITestCase):
         mandatory_task = CycleTask.objects.get(cycle=cycle, task_name="Sign contract")
         self.assertTrue(mandatory_task.is_mandatory)
         self.assertFalse(mandatory_task.is_fixed_date)
-        self.assertEqual(mandatory_task.reminder_lead_days, 1)
+        self.assertEqual(mandatory_task.reminder_lead_days, [1])
         self.assertEqual(mandatory_task.note_text, "Send to legal for review first")
 
         optional_task = CycleTask.objects.get(cycle=cycle, task_name="Send welcome kit")
         self.assertFalse(optional_task.is_mandatory)
         self.assertTrue(optional_task.is_fixed_date)
-        self.assertIsNone(optional_task.reminder_lead_days)
+        self.assertEqual(optional_task.reminder_lead_days, [])
         self.assertIsNone(optional_task.note_text)
 
         cycle_activity = CycleActivity.objects.get(cycle=cycle, activity_name="Orientation week")

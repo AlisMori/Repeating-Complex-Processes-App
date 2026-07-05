@@ -39,21 +39,21 @@ class CycleTaskSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         cycle = attrs.get("cycle") or getattr(self.instance, "cycle", None)
-        template_task = attrs.get("template_task") or getattr(self.instance, "template_task", None)
+        template_task = attrs.get("template_task") or getattr(
+            self.instance,
+            "template_task",
+            None,
+        )
+
         if cycle and template_task and cycle.template_id != template_task.template_id:
             raise serializers.ValidationError(
                 {"template_task": ["The template task must belong to the cycle template."]}
             )
+
         return attrs
 
-    class Meta:
-        model = CycleTask
-        fields = "__all__"
-        # Only status is writable here (Module 9, FR-6.1). Dates go
-        # through cycle-tasks/{id}/shift/ (Module 8, FR-6.5), everything
-        # else is fixed at creation time by the template it came from.
-        read_only_fields = [
-            "cycle_task_id",
+    def update(self, instance, validated_data):
+        protected_fields = [
             "cycle",
             "template_task",
             "task_name",
@@ -64,6 +64,16 @@ class CycleTaskSerializer(serializers.ModelSerializer):
             "reminder_lead_days",
             "note_text",
         ]
+
+        for field in protected_fields:
+            validated_data.pop(field, None)
+
+        return super().update(instance, validated_data)
+
+    class Meta:
+        model = CycleTask
+        fields = "__all__"
+        read_only_fields = ["cycle_task_id"]
 
 
 class CycleActivitySerializer(serializers.ModelSerializer):
@@ -90,7 +100,12 @@ class CycleActivitySerializer(serializers.ModelSerializer):
             "template_activity",
             None,
         )
-        if cycle and template_activity and cycle.template_id != template_activity.template_id:
+
+        if (
+            cycle
+            and template_activity
+            and cycle.template_id != template_activity.template_id
+        ):
             raise serializers.ValidationError(
                 {
                     "template_activity": [
@@ -98,21 +113,26 @@ class CycleActivitySerializer(serializers.ModelSerializer):
                     ]
                 }
             )
+
         return attrs
 
-    class Meta:
-        model = CycleActivity
-        fields = "__all__"
-        # Only the dates are writable here, no engine involved, activities
-        # don't participate in dependency recalculation. Everything else
-        # is fixed at creation time by the template it came from.
-        read_only_fields = [
-            "cycle_activity_id",
+    def update(self, instance, validated_data):
+        protected_fields = [
             "cycle",
             "template_activity",
             "activity_name",
             "note_text",
         ]
+
+        for field in protected_fields:
+            validated_data.pop(field, None)
+
+        return super().update(instance, validated_data)
+
+    class Meta:
+        model = CycleActivity
+        fields = "__all__"
+        read_only_fields = ["cycle_activity_id"]
 
 
 class TaskDependencySerializer(serializers.ModelSerializer):
