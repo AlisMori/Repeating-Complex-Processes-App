@@ -496,7 +496,7 @@ class CycleOwnershipTests(JwtAuthMixin, APITestCase):
                 "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.other_cycle_task.cycle_task_id],
             ),
-            {"delay_days": 1, "scope": "single"},  # body now required by the new endpoint
+            {"new_start_date": "2026-06-02", "scope": "single"},
             format="json",
         )
 
@@ -510,15 +510,21 @@ class CycleOwnershipTests(JwtAuthMixin, APITestCase):
                 "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.user_cycle_task.cycle_task_id],
             ),
-            {"delay_days": 1, "scope": "single"},  # body now required by the new endpoint
+            {"new_start_date": "2026-06-05", "scope": "cascade"},
             format="json",
         )
+        
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user_cycle_task.refresh_from_db()
-        self.assertEqual(self.user_cycle_task.calculated_start_date, date(2026, 6, 2))
-        self.assertEqual(self.user_cycle_task.calculated_end_date, date(2026, 6, 4))
-
+        self.assertEqual(
+        self.user_cycle_task.calculated_start_date,
+            date(2026, 6, 5),
+        )
+        self.assertEqual(
+            self.user_cycle_task.calculated_end_date,
+            date(2026, 6, 7),
+        )
 
 class FullAuthorizationFlowTests(JwtAuthMixin, APITestCase):
     def setUp(self):

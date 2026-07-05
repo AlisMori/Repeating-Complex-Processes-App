@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.db import models
-
+from django.contrib.postgres.fields import ArrayField
 
 # This model stores reusable process templates.
 # Template is the main blueprint that later can be used to create cycle instances.
@@ -81,7 +81,11 @@ class TemplateTask(models.Model):
     duration_days = models.PositiveIntegerField(blank=True, null=True)
     is_mandatory = models.BooleanField(default=True)
     is_fixed_date = models.BooleanField(default=False)
-    reminder_lead_days = models.PositiveIntegerField(blank=True, null=True)
+    reminder_lead_days = ArrayField(
+        models.PositiveIntegerField(),
+        default=list,
+        blank=True,
+    )
     note_text = models.TextField(blank=True, null=True)
 
     def __str__(self):
