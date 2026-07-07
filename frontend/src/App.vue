@@ -2,6 +2,7 @@
 import { RouterView } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from './stores/auth'
+import ToastContainer from './components/ui/ToastContainer.vue'
 
 const authStore = useAuthStore()
 const { authMessage } = storeToRefs(authStore)
@@ -13,6 +14,7 @@ const { authMessage } = storeToRefs(authStore)
     <button type="button" @click="authStore.clearAuthMessage()">Dismiss</button>
   </div>
   <RouterView />
+  <ToastContainer />
 </template>
 
 <style>

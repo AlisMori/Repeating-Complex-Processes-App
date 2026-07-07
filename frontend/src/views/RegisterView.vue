@@ -187,15 +187,14 @@ async function submit() {
     </form>
 
     <p class="bottom-link">
-      <span class="bottom-link-text">Already have an account?</span>
-      <RouterLink to="/auth/login" class="bottom-link-action"> Sign in</RouterLink>
+      Already have an account? <RouterLink to="/auth/login" class="bottom-link-action">Sign in</RouterLink>
     </p>
-
 
   </AuthLayout>
 </template>
 
 <style scoped>
+form { width: 100%; }
 .form-title {
   font-size: 22px;
   font-weight: 600;
@@ -275,8 +274,8 @@ async function submit() {
 
 .bottom-link {
   text-align: center;
-  font-size: 13px;
-  margin: 18px 0 0;
+  font-size: 14px;
+  margin: 22px 0;
 }
 
 .bottom-link-text {
@@ -288,5 +287,4 @@ async function submit() {
   color: var(--violet);
   font-weight: 500;
 }
-
 </style>

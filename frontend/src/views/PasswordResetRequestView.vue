@@ -127,6 +127,7 @@ async function submit() {
 </template>
 
 <style scoped>
+form { width: 100%; }
 .icon-circle {
   width: 50px;
   height: 50px;

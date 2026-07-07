@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from templates_mgmt.models import Template, TemplateTask, TemplateActivity
@@ -57,7 +58,11 @@ class CycleTask(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     is_mandatory = models.BooleanField(default=True)
     is_fixed_date = models.BooleanField(default=False)
-    reminder_lead_days = models.PositiveIntegerField(blank=True, null=True)
+    reminder_lead_days = ArrayField(
+        models.PositiveIntegerField(),
+        blank=True,
+        null=True,
+    )
     note_text = models.TextField(blank=True, null=True)
 
     def __str__(self):

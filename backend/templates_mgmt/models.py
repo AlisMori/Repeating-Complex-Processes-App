@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 
@@ -81,11 +82,21 @@ class TemplateTask(models.Model):
     duration_days = models.PositiveIntegerField(blank=True, null=True)
     is_mandatory = models.BooleanField(default=True)
     is_fixed_date = models.BooleanField(default=False)
-    reminder_lead_days = models.PositiveIntegerField(blank=True, null=True)
+    reminder_lead_days = ArrayField(
+        models.PositiveIntegerField(),
+        blank=True,
+        null=True,
+        help_text="Lead times in days before the task is due (e.g. [7, 3, 0]). "
+                  "Multiple simultaneous reminders are supported per the client's "
+                  "requirement that 'chains of reminders are valid'.",
+    )
     note_text = models.TextField(blank=True, null=True)
 
     def __str__(self):
         return self.task_name
+
+    class Meta:
+        ordering = ["template_task_id"]
 
 
 # TemplateActivity stores non-actionable timeline activities inside a template.
@@ -105,6 +116,9 @@ class TemplateActivity(models.Model):
 
     def __str__(self):
         return self.activity_name
+
+    class Meta:
+        ordering = ["template_activity_id"]
 
 
 # This association model allows one task to have multiple tags.

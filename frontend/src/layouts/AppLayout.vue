@@ -73,7 +73,6 @@ const navItems = [
 
       <!-- Nav -->
       <nav class="sidebar-nav">
-        <span class="nav-section-label">Main</span>
 
         <RouterLink
           v-for="item in navItems"
@@ -86,8 +85,6 @@ const navItems = [
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" v-html="item.icon"></svg>
           <span class="nav-label">{{ item.label }}</span>
         </RouterLink>
-
-        <span class="nav-section-label" style="margin-top: 8px;">Account</span>
 
         <RouterLink :to="{ name: 'account-settings' }" class="nav-item" active-class="nav-item-active">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -208,7 +205,7 @@ const navItems = [
 }
 
 .nav-section-label {
-  font-size: 10.5px;
+  font-size: var(--font-upper);
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -221,9 +218,9 @@ const navItems = [
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-radius: var(--radius-md);
-  font-size: 13.5px;
+  font-size: var(--font-body);
   color: var(--text-secondary);
   text-decoration: none;
   transition: background var(--transition-fast), color var(--transition-fast);
@@ -289,7 +286,7 @@ const navItems = [
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--font-hint);
   font-weight: 600;
   color: var(--violet);
   flex-shrink: 0;
@@ -298,7 +295,7 @@ const navItems = [
 .user-info { flex: 1; min-width: 0; text-align: left; }
 
 .user-name {
-  font-size: 13px;
+  font-size: var(--font-label);
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
@@ -307,7 +304,7 @@ const navItems = [
 }
 
 .user-email {
-  font-size: 11px;
+  font-size: var(--font-hint);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -345,7 +342,7 @@ const navItems = [
 }
 
 .dropdown-name {
-  font-size: 13px;
+  font-size: var(--font-label);
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 1px;
@@ -361,7 +358,7 @@ const navItems = [
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  font-size: 13px;
+  font-size: var(--font-label);
   color: var(--text-secondary);
   text-decoration: none;
   border-bottom: 1px solid var(--border-light);
