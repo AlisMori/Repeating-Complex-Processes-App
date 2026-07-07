@@ -43,6 +43,12 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
+CORS_ALLOWED_ORIGINS += [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
 
 CORS_ALLOW_CREDENTIALS = True
 # Application definition
@@ -57,6 +63,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
     'rest_framework',
     'django_q',
     'accounts',
@@ -175,3 +182,23 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # while develo
 # EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
+
+
+# django-q2, background job runner (mark_overdue_tasks, Module 9).
+# Uses the ORM broker, so no extra infrastructure (Redis etc) is needed,
+# it reuses the Postgres connection already configured above. This makes
+# django-q2 usable, it does not by itself run anything: a worker process
+# (`python manage.py qcluster`) still has to be running continuously
+# somewhere for scheduled jobs to actually fire. See
+# cycles/SCHEDULER_SETUP.md for the deployment steps once hosting is
+# decided (NFR-6.4 requires this to work on both Linux and Windows).
+Q_CLUSTER = {
+    "name": "recurra",
+    "workers": int(os.getenv("Q_CLUSTER_WORKERS", 2)),
+    "recycle": 500,
+    "timeout": 60,
+    "retry": 90,
+    "queue_limit": 50,
+    "bulk": 10,
+    "orm": "default",
+}

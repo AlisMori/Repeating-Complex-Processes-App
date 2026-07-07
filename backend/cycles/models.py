@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
-
+from django.contrib.postgres.fields import ArrayField
 from templates_mgmt.models import Template, TemplateTask, TemplateActivity
 
 
@@ -38,7 +38,7 @@ class CycleTask(models.Model):
         ("in_progress", "In Progress"),
         ("completed", "Completed"),
         ("overdue", "Overdue"),
-        ("delayed", "Delayed"),
+        ("skipped", "Skipped"),
     ]
 
     cycle_task_id = models.AutoField(primary_key=True)

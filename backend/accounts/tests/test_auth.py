@@ -7,9 +7,9 @@ from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.http import urlsafe_base64_encode
-from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import AccessToken
 
 
 User = get_user_model()
@@ -485,3 +485,4 @@ class AuthApiTests(APITestCase):
         self.assertTrue(
             default_token_generator.check_token(self.user, token_match.group(1))
         )
+

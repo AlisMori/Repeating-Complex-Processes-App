@@ -6,15 +6,209 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from cycles.models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from templates_mgmt.models import Template, TemplateActivity, TemplateTask
-
-from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 
 
 User = get_user_model()
 
 
-class TaskDependencyAuthorizationTests(APITestCase):
+class JwtAuthMixin:
+    def authenticate(self, user):
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+
+
+class TemplateAuthorizationIntegrationTests(JwtAuthMixin, APITestCase):
+    def setUp(self):
+        self.user_a = User.objects.create_user(
+            username="template_user_a",
+            email="template_user_a@example.com",
+            password="StrongPass123!",
+        )
+        self.user_b = User.objects.create_user(
+            username="template_user_b",
+            email="template_user_b@example.com",
+            password="StrongPass123!",
+        )
+
+        self.template_a = Template.objects.create(
+            user=self.user_a,
+            template_name="User A Private Template",
+        )
+        self.template_task_a = TemplateTask.objects.create(
+            template=self.template_a,
+            task_name="User A Template Task",
+            day_offset=0,
+            duration_days=1,
+        )
+        self.template_activity_a = TemplateActivity.objects.create(
+            template=self.template_a,
+            activity_name="User A Template Activity",
+            start_offset_days=0,
+            end_offset_days=1,
+        )
+
+    def test_template_endpoints_reject_anonymous_requests(self):
+        templates_response = self.client.get(reverse("templates-list"))
+        template_tasks_response = self.client.get(reverse("template-tasks-list"))
+        template_activities_response = self.client.get(
+            reverse("template-activities-list")
+        )
+        task_dependencies_response = self.client.get(reverse("task-dependencies-list"))
+        template_detail_response = self.client.get(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        export_response = self.client.get(
+            reverse("templates-export", args=[self.template_a.template_id])
+        )
+        create_cycle_response = self.client.post(
+            reverse("templates-create-cycle", args=[self.template_a.template_id]),
+            {"cycle_name": "Anonymous Cycle", "start_date": "2026-06-10"},
+            format="json",
+        )
+
+        self.assertEqual(templates_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(
+            template_tasks_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(
+            template_activities_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(
+            task_dependencies_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(
+            template_detail_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(export_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(
+            create_cycle_response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_valid_jwt_allows_access_to_owned_template_resources(self):
+        self.authenticate(self.user_a)
+
+        template_response = self.client.get(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        task_response = self.client.get(
+            reverse("template-tasks-detail", args=[self.template_task_a.template_task_id])
+        )
+        activity_response = self.client.get(
+            reverse(
+                "template-activities-detail",
+                args=[self.template_activity_a.template_activity_id],
+            )
+        )
+        export_response = self.client.get(
+            reverse("templates-export", args=[self.template_a.template_id])
+        )
+        create_cycle_response = self.client.post(
+            reverse("templates-create-cycle", args=[self.template_a.template_id]),
+            {"cycle_name": "Authorized Cycle", "start_date": "2026-06-10"},
+            format="json",
+        )
+
+        self.assertEqual(template_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(task_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(activity_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(export_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(create_cycle_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_cycle_response.data["user"], self.user_a.id)
+
+    def test_user_b_cannot_access_user_a_private_template_resources(self):
+        self.authenticate(self.user_b)
+
+        templates_response = self.client.get(reverse("templates-list"))
+        tasks_response = self.client.get(reverse("template-tasks-list"))
+        activities_response = self.client.get(reverse("template-activities-list"))
+        detail_response = self.client.get(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        update_response = self.client.patch(
+            reverse("templates-detail", args=[self.template_a.template_id]),
+            {"template_name": "Unauthorized Rename"},
+            format="json",
+        )
+        delete_response = self.client.delete(
+            reverse("templates-detail", args=[self.template_a.template_id])
+        )
+        export_response = self.client.get(
+            reverse("templates-export", args=[self.template_a.template_id])
+        )
+        create_cycle_response = self.client.post(
+            reverse("templates-create-cycle", args=[self.template_a.template_id]),
+            {"cycle_name": "Unauthorized Cycle", "start_date": "2026-06-10"},
+            format="json",
+        )
+        task_detail_response = self.client.get(
+            reverse("template-tasks-detail", args=[self.template_task_a.template_task_id])
+        )
+        activity_detail_response = self.client.get(
+            reverse(
+                "template-activities-detail",
+                args=[self.template_activity_a.template_activity_id],
+            )
+        )
+
+        self.assertEqual(templates_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(tasks_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(activities_response.status_code, status.HTTP_200_OK)
+        self.assertNotIn(
+            self.template_a.template_id,
+            {item["template_id"] for item in templates_response.data},
+        )
+        self.assertNotIn(
+            self.template_task_a.template_task_id,
+            {item["template_task_id"] for item in tasks_response.data},
+        )
+        self.assertNotIn(
+            self.template_activity_a.template_activity_id,
+            {item["template_activity_id"] for item in activities_response.data},
+        )
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(export_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(create_cycle_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(task_detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(activity_detail_response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_b_cannot_create_child_resources_under_user_a_template(self):
+        self.authenticate(self.user_b)
+
+        task_response = self.client.post(
+            reverse("template-tasks-list"),
+            {
+                "template": self.template_a.template_id,
+                "task_name": "Unauthorized Template Task",
+                "day_offset": 1,
+                "duration_days": 2,
+            },
+            format="json",
+        )
+        activity_response = self.client.post(
+            reverse("template-activities-list"),
+            {
+                "template": self.template_a.template_id,
+                "activity_name": "Unauthorized Template Activity",
+                "start_offset_days": 1,
+                "end_offset_days": 2,
+            },
+            format="json",
+        )
+
+        self.assertEqual(task_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(activity_response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class TaskDependencyAuthorizationTests(JwtAuthMixin, APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="dependency-owner",
@@ -85,12 +279,8 @@ class TaskDependencyAuthorizationTests(APITestCase):
             depends_on_task=self.hidden_dependency_task,
         )
 
-    def authenticate(self):
-        refresh = RefreshToken.for_user(self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
-
     def test_dependency_list_only_shows_accessible_templates(self):
-        self.authenticate()
+        self.authenticate(self.user)
 
         response = self.client.get(reverse("task-dependencies-list"))
 
@@ -101,7 +291,7 @@ class TaskDependencyAuthorizationTests(APITestCase):
         self.assertNotIn(self.hidden_dependency.dependency_id, returned_ids)
 
     def test_dependency_detail_returns_404_for_inaccessible_template(self):
-        self.authenticate()
+        self.authenticate(self.user)
 
         response = self.client.get(
             reverse("task-dependencies-detail", args=[self.hidden_dependency.dependency_id])
@@ -110,7 +300,7 @@ class TaskDependencyAuthorizationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_dependency_create_rejects_writes_to_non_owned_public_template(self):
-        self.authenticate()
+        self.authenticate(self.user)
 
         response = self.client.post(
             reverse("task-dependencies-list"),
@@ -125,7 +315,7 @@ class TaskDependencyAuthorizationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-class CycleOwnershipTests(APITestCase):
+class CycleOwnershipTests(JwtAuthMixin, APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             username="cycle-owner",
@@ -220,10 +410,6 @@ class CycleOwnershipTests(APITestCase):
             calculated_end_date=date(2026, 6, 2),
         )
 
-    def authenticate(self, user=None):
-        refresh = RefreshToken.for_user(user or self.user)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
-
     def test_other_user_cannot_create_cycle_from_private_template(self):
         self.authenticate(self.user)
 
@@ -307,9 +493,10 @@ class CycleOwnershipTests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "cycle-tasks-recalculate-dependencies",
+                "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.other_cycle_task.cycle_task_id],
             ),
+            {"new_start_date": "2026-06-02", "scope": "single"},
             format="json",
         )
 
@@ -320,18 +507,26 @@ class CycleOwnershipTests(APITestCase):
 
         response = self.client.post(
             reverse(
-                "cycle-tasks-recalculate-dependencies",
+                "cycle-tasks-shift",  # was "cycle-tasks-recalculate-dependencies"
                 args=[self.user_cycle_task.cycle_task_id],
             ),
+            {"new_start_date": "2026-06-05", "scope": "cascade"},
             format="json",
         )
+        
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user_cycle_task.refresh_from_db()
-        self.assertEqual(self.user_cycle_task.calculated_start_date, date(2026, 6, 4))
+        self.assertEqual(
+        self.user_cycle_task.calculated_start_date,
+            date(2026, 6, 5),
+        )
+        self.assertEqual(
+            self.user_cycle_task.calculated_end_date,
+            date(2026, 6, 7),
+        )
 
-
-class FullAuthorizationFlowTests(APITestCase):
+class FullAuthorizationFlowTests(JwtAuthMixin, APITestCase):
     def setUp(self):
         self.user_a = User.objects.create_user(
             username="user_a",
@@ -398,10 +593,6 @@ class FullAuthorizationFlowTests(APITestCase):
             calculated_start_date=date(2026, 6, 1),
             calculated_end_date=date(2026, 6, 2),
         )
-
-    def authenticate(self, user):
-        refresh = RefreshToken.for_user(user)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
 
     def test_cycles_endpoints_reject_anonymous_requests(self):
         cycle_response = self.client.get(reverse("cycles-list"))
@@ -579,47 +770,54 @@ class FullAuthorizationFlowTests(APITestCase):
         self.assertEqual(collection_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(action_response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_user_b_cannot_update_delay_or_recalculate_user_a_runtime_task(self):
-        self.authenticate(self.user_b)
+        # record-delay and recalculate-dependencies endpoints were both removed
+        # and merged into shift/shift-preview (Module 8, Zhyldyz).
+        def test_user_b_cannot_update_delay_or_recalculate_user_a_runtime_task(self):
+            self.authenticate(self.user_b)
 
-        update_response = self.client.patch(
-            reverse("cycle-tasks-detail", args=[self.runtime_task_a.cycle_task_id]),
-            {"status": "completed"},
-            format="json",
-        )
-        delay_response = self.client.post(
-            reverse("cycle-tasks-record-delay", args=[self.runtime_task_a.cycle_task_id]),
-            {"delay_days": 2},
-            format="json",
-        )
-        recalculate_response = self.client.post(
-            reverse(
-                "cycle-tasks-recalculate-dependencies",
-                args=[self.runtime_task_a.cycle_task_id],
-            ),
-            format="json",
-        )
+            update_response = self.client.patch(
+                reverse("cycle-tasks-detail", args=[self.runtime_task_a.cycle_task_id]),
+                {"status": "completed"},
+                format="json",
+            )
+            shift_response = self.client.post(
+                reverse("cycle-tasks-shift", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-record-delay"
+                {"delay_days": 2, "scope": "single"},
+                format="json",
+            )
+            preview_response = self.client.post(
+                reverse("cycle-tasks-shift-preview", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-recalculate-dependencies"
+                {"delay_days": 2},
+                format="json",
+            )
 
-        self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(delay_response.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertEqual(recalculate_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(shift_response.status_code, status.HTTP_404_NOT_FOUND)
+            self.assertEqual(preview_response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_owner_can_record_delay_on_owned_runtime_task(self):
-        self.authenticate(self.user_a)
+        # Renamed from test_owner_can_record_delay_on_owned_runtime_task. The
+        # new shift endpoint (Module 8, Zhyldyz) never sets status itself,
+        # that's handled separately by Runtime Task Management (Module 9),
+        # so the old status == "delayed" assertion was dropped.
+        def test_owner_can_shift_owned_runtime_task(self):
+            self.authenticate(self.user_a)
 
-        response = self.client.post(
-            reverse("cycle-tasks-record-delay", args=[self.runtime_task_a.cycle_task_id]),
-            {"delay_days": 2},
-            format="json",
-        )
+            response = self.client.post(
+                reverse("cycle-tasks-shift", args=[self.runtime_task_a.cycle_task_id]),
+                # was "cycle-tasks-record-delay"
+                {"delay_days": 2, "scope": "single"},
+                format="json",
+            )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.runtime_task_a.refresh_from_db()
-        self.assertEqual(self.runtime_task_a.calculated_start_date, date(2026, 6, 3))
-        self.assertEqual(self.runtime_task_a.status, "delayed")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.runtime_task_a.refresh_from_db()
+            self.assertEqual(self.runtime_task_a.calculated_start_date, date(2026, 6, 3))
+            self.assertEqual(self.runtime_task_a.calculated_end_date, date(2026, 6, 4))
 
 
-class TaskDependencyOwnershipTests(APITestCase):
+class TaskDependencyOwnershipTests(JwtAuthMixin, APITestCase):
     def setUp(self):
         self.user_a = User.objects.create_user(
             username="user_a_dependency",
@@ -650,10 +848,6 @@ class TaskDependencyOwnershipTests(APITestCase):
             task=self.task_a,
             depends_on_task=self.depends_on_task_a,
         )
-
-    def authenticate(self, user):
-        refresh = RefreshToken.for_user(user)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
 
     def test_user_a_can_access_owned_task_dependency(self):
         self.authenticate(self.user_a)
@@ -703,3 +897,4 @@ class TaskDependencyOwnershipTests(APITestCase):
         self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(update_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+
