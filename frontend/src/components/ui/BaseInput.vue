@@ -17,6 +17,8 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   autocomplete: { type: String, default: 'off' },
   id: { type: String, default: '' },
+  min: { type: [String, Number], default: undefined },
+  max: { type: [String, Number], default: undefined },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -59,6 +61,8 @@ const inputId = computed(() => props.id || `input-${Math.random().toString(36).s
         :required="required"
         :disabled="disabled"
         :autocomplete="autocomplete"
+        :min="min"
+        :max="max"
         @input="emit('update:modelValue', $event.target.value)"
       />
 

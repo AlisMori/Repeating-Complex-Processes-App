@@ -7,6 +7,7 @@ import { storeToRefs } from 'pinia'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -295,12 +296,12 @@ const sections = [
                 <div class="setting-desc">Automatically log out after a period of inactivity</div>
               </div>
               <div class="setting-control">
-                <select v-model="sessionTimeout" class="setting-select">
+                <BaseSelect v-model="sessionTimeout" class="setting-select">
                   <option value="15">15 minutes</option>
                   <option value="30">30 minutes</option>
                   <option value="60">1 hour</option>
                   <option value="120">2 hours</option>
-                </select>
+                </BaseSelect>
               </div>
             </div>
 
@@ -341,7 +342,7 @@ const sections = [
 </template>
 
 <style scoped>
-.topbar-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.topbar-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
 
 .settings-page {
   display: flex;
@@ -359,9 +360,9 @@ const sections = [
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: var(--font-body);
   color: var(--text-secondary);
   cursor: pointer;
   margin-bottom: 2px;
@@ -390,14 +391,14 @@ const sections = [
 }
 
 .section-card-header { padding: 15px 20px; border-bottom: 1px solid var(--border-light); }
-.section-card-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
-.section-card-desc { font-size: 13px; color: var(--text-muted); }
+.section-card-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+.section-card-desc { font-size: var(--font-label); color: var(--text-muted); }
 
 /* AVATAR */
 .avatar-row { display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid var(--border-light); }
-.avatar-lg { width: 48px; height: 48px; border-radius: 50%; background: var(--violet-bg); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 600; color: var(--violet); flex-shrink: 0; }
-.avatar-name { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
-.avatar-email { font-size: 14px; color: var(--text-muted); }
+.avatar-lg { width: 48px; height: 48px; border-radius: 50%; background: var(--violet-bg); display: flex; align-items: center; justify-content: center; font-size: var(--font-title); font-weight: 600; color: var(--violet); flex-shrink: 0; }
+.avatar-name { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+.avatar-email { font-size: var(--font-label); color: var(--text-muted); }
 
 /* ROWS */
 .setting-row {
@@ -413,24 +414,13 @@ const sections = [
 .setting-row.disabled { opacity: 0.5; pointer-events: none; }
 
 .setting-info { flex: 1; }
-.setting-label { font-size: 14px; font-weight: 500; color: var(--text-primary); margin-bottom: 2px; }
-.setting-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.setting-label { font-size: var(--font-label); font-weight: 500; color: var(--text-primary); margin-bottom: 2px; }
+.setting-desc { font-size: var(--font-label); color: var(--text-muted); line-height: 1.5; }
 .setting-control { flex-shrink: 0; width: 280px; }
 
-/* SELECT */
-.setting-select {
-  height: 36px;
-  padding: 0 11px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-family: var(--font-main);
-  background: #FAFAFA;
-  color: var(--text-primary);
-  outline: none;
-  width: 160px;
-  cursor: pointer;
-}
+/* SELECT — compact width for the settings row layout */
+.setting-select { width: 160px; }
+.setting-select :deep(.base-select) { height: 36px; padding: 0 26px 0 11px; }
 
 /* TOGGLE */
 .toggle-switch { position: relative; width: 38px; height: 21px; display: inline-block; }
@@ -441,9 +431,9 @@ input:checked + .toggle-slider { background: var(--violet); }
 input:checked + .toggle-slider::before { transform: translateX(17px); }
 
 /* REMINDER CHECKBOXES */
-.reminder-check-group { display: flex; gap: 18px; }
-.reminder-check-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
-.reminder-check-item input { accent-color: var(--violet); width: 14px; height: 14px; cursor: pointer; }
+.reminder-check-group { display: flex; gap: 20px; flex-wrap: wrap; }
+.reminder-check-item { display: flex; align-items: center; gap: 8px; font-size: var(--font-body); color: var(--text-primary); cursor: pointer; }
+.reminder-check-item input { accent-color: var(--violet); width: 17px; height: 17px; cursor: pointer; }
 
 /* SAVE ROW */
 .btn-save-row {
@@ -455,8 +445,8 @@ input:checked + .toggle-slider::before { transform: translateX(17px); }
   border-top: 1px solid var(--border-light);
 }
 
-.saved-msg { font-size: 13px; color: var(--success); font-weight: 500; }
-.error-msg { font-size: 13px; color: var(--danger); }
+.saved-msg { font-size: var(--font-body); color: var(--success); font-weight: 500; }
+.error-msg { font-size: var(--font-body); color: var(--danger); }
 
 /* DANGER ZONE */
 .danger-zone { border-color: #FECACA; }

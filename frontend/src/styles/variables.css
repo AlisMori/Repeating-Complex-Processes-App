@@ -1,9 +1,12 @@
 /* ============================================
    RECURRA — CSS VARIABLES & DESIGN TOKENS
    /frontend/src/styles/variables.css
-   ============================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+   Note: the Inter font is loaded via a <link> in index.html,
+   not an @import here — @import must be the very first rule in
+   a stylesheet, and this file loads after Tailwind's own CSS,
+   which would make an @import here invalid.
+   ============================================ */
 
 :root {
   /* ── BRAND COLORS ── */
@@ -17,8 +20,8 @@
   --white:          #FFFFFF;
   --bg-page:        #F8FAFC;
   --text-primary:   #1E293B;
-  --text-secondary: #64748B;
-  --text-muted:     #94A3B8;
+  --text-secondary: #334155;
+  --text-muted:     #475569;
   --border:         #CBD5E1;
   --border-light:   #E2E8F0;
 
@@ -32,16 +35,39 @@
   --info:        #3B82F6;
   --info-bg:     #EFF6FF;
 
-  /* ── TYPOGRAPHY ── */
+  /* ── TYPOGRAPHY SCALE ──
+     Use these variables everywhere instead of hardcoded px values.
+     Changing one value here updates the whole app instantly.
+  ── */
   --font-main: 'Inter', sans-serif;
-  --text-xs:   11px;
-  --text-sm:   12px;
-  --text-base: 13.5px;
-  --text-md:   14px;
-  --text-lg:   16px;
-  --text-xl:   18px;
-  --text-2xl:  22px;
-  --text-3xl:  28px;
+
+  /* Raw scale — use semantic names below where possible */
+  --text-xs:   13px;
+  --text-sm:   14px;
+  --text-base: 15px;
+  --text-md:   15.5px;
+  --text-lg:   17px;
+  --text-xl:   19px;
+  --text-2xl:  24px;
+  --text-3xl:  30px;
+
+  /* Semantic font sizes — use these in components */
+  --font-hint:    13px;   
+  --font-label:   14px;   
+  --font-body:    15px;   
+  --font-title:   16px;   
+  --font-heading: 20px;   
+  --font-display: 25px;   
+  --font-badge:   12.5px; 
+  --font-upper:   12px;   
+
+  /* Button sizes */
+  --btn-font-sm: 13.5px;
+  --btn-font-md: 14.5px;
+  --btn-font-lg: 15px;
+  --btn-height-sm: 42px;
+  --btn-height-md: 52px;
+  --btn-height-lg: 60px;
 
   /* ── SPACING ── */
   --radius-sm: 6px;

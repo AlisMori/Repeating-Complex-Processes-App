@@ -1,6 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../views/HomeView.vue'
-import AuthHomeView from '../views/AuthHomeView.vue'
 import DashboardView from '../views/DashboardView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
@@ -11,6 +9,7 @@ import CycleCreateView from '../views/CycleCreateView.vue'
 import CycleDetailView from '../views/CycleDetailView.vue'
 import TemplateLibraryView from '../views/TemplateLibraryView.vue'
 import TemplateCreateView from '../views/TemplateCreateView.vue'
+import TemplateDetailView from '../views/TemplateDetailView.vue'
 import AccountSettingsView from '../views/AccountSettingsView.vue'
 import { useAuthStore } from '../stores/auth'
 import pinia from '../stores'
@@ -22,23 +21,15 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
+      // No public landing page — send straight into the app.
+      // The router guard below bounces unauthenticated users on
+      // to /auth/login automatically.
       path: '/',
-      name: 'home',
-      component: HomeView,
-    },
-    {
-      path: '/about',
-      name: 'about',
-      // route level code-splitting
-      // this generates a separate chunk (About.[hash].js) for this route
-      // which is lazy-loaded when the route is visited.
-      component: () => import('../views/AboutView.vue'),
+      redirect: { name: 'login' },
     },
     {
       path: '/auth',
-      name: 'auth-home',
-      component: AuthHomeView,
-      meta: { guestOnly: true },
+      redirect: { name: 'login' },
     },
     {
       path: '/auth/register',
@@ -121,6 +112,12 @@ const router = createRouter({
     {
       path: '/templates/:id',
       name: 'template-detail',
+      component: TemplateDetailView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/templates/:id/edit',
+      name: 'template-edit',
       component: TemplateCreateView,
       meta: { requiresAuth: true },
     },

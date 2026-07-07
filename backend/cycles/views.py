@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.db import transaction
 from rest_framework import permissions, status, viewsets
@@ -17,6 +17,7 @@ from core.permissions import (
     user_can_edit_template,
 )
 from templates_mgmt.models import Template
+from templates_mgmt.scheduling import resolve_effective_offsets
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .services import generate_cycle_runtime_records
 from .dependency_engine import (
@@ -43,12 +44,68 @@ from .serializers import (
 )
 
 
-class CycleFrozen(APIException):
-    # Design Doc, API-02: "422 cycle not running" for the shift endpoint,
-    # applied the same way everywhere a cycle's contents can be edited,
-    # not just on shift.
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-    default_code = "cycle_not_running"
+def recompute_cycle_schedule(cycle):
+    """
+    Rebuilds every non-completed task's calculated dates for this
+    cycle, respecting the full dependency chain (however many hops
+    deep), using each task's CURRENT calculated_start_date /
+    calculated_end_date as its own baseline. This means a delay
+    already applied, or a manual edit, is preserved rather than
+    re-derived from the template — but the dependency chain always
+    wins if it requires a later start.
+
+    Completed tasks are never moved: their own dates are frozen, but
+    everything downstream still sees their real end date as a
+    constraint. Fixed-end-date tasks behave the same way (per the
+    Requirements doc), except a conflict is reported rather than the
+    task being silently shifted.
+
+    Returns (updated_cycle_task_ids, circular_task_names, conflict_task_names).
+    """
+    cycle_tasks = list(
+        CycleTask.objects.filter(cycle=cycle).select_related("template_task")
+    )
+    by_id = {ct.cycle_task_id: ct for ct in cycle_tasks}
+    template_task_to_cycle_task_id = {ct.template_task_id: ct.cycle_task_id for ct in cycle_tasks}
+
+    nodes = {}
+    for ct in cycle_tasks:
+        duration = max((ct.calculated_end_date - ct.calculated_start_date).days, 0)
+        nodes[ct.cycle_task_id] = {
+            "offset": ct.calculated_start_date.toordinal(),
+            "duration": duration,
+            "fixed": ct.is_fixed_date or ct.status == "completed",
+        }
+
+    edges = {}
+    template_task_ids = list(template_task_to_cycle_task_id.keys())
+    deps = TaskDependency.objects.filter(task_id__in=template_task_ids)
+    for dep in deps:
+        dependent_id = template_task_to_cycle_task_id.get(dep.task_id)
+        dependency_id = template_task_to_cycle_task_id.get(dep.depends_on_task_id)
+        if dependent_id is None or dependency_id is None:
+            continue
+        edges.setdefault(dependent_id, []).append(dependency_id)
+
+    effective, circular, conflicts = resolve_effective_offsets(nodes, edges)
+
+    updated_ids = []
+    for cycle_task_id, (start_ord, end_ord) in effective.items():
+        ct = by_id[cycle_task_id]
+        if ct.status == "completed":
+            continue
+        new_start = date.fromordinal(start_ord)
+        new_end = date.fromordinal(end_ord)
+        if new_start != ct.calculated_start_date or new_end != ct.calculated_end_date:
+            ct.calculated_start_date = new_start
+            ct.calculated_end_date = new_end
+            ct.save(update_fields=["calculated_start_date", "calculated_end_date"])
+            updated_ids.append(cycle_task_id)
+
+    id_to_name = {ct.cycle_task_id: ct.task_name for ct in cycle_tasks}
+    circular_names = [id_to_name.get(i, str(i)) for i in circular]
+    conflict_names = [id_to_name.get(i, str(i)) for i in conflicts]
+    return updated_ids, circular_names, conflict_names
 
 
 class CycleInstanceViewSet(viewsets.ModelViewSet):
@@ -106,7 +163,13 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         owned_cycle_ids = CycleInstance.objects.filter(
             owned_cycles_q(self.request.user)
         ).values("pk")
-        return CycleTask.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
+        queryset = CycleTask.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
+
+        cycle_id = self.request.query_params.get("cycle")
+        if cycle_id:
+            queryset = queryset.filter(cycle_id=cycle_id)
+
+        return queryset
 
     def perform_create(self, serializer):
         from rest_framework.exceptions import PermissionDenied
@@ -174,45 +237,41 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         }
         return parsed, None
 
-    @action(detail=True, methods=["post"])
-    def shift_preview(self, request, pk=None):
-        cycle_task = self.get_object()
-        try:
-            assert_cycle_is_running(cycle_task.cycle)
-        except CycleNotRunning as exc:
-            raise CycleFrozen(exc.message)
-        parsed, error_response = self._parse_shift_input(request)
-        if error_response:
-            return error_response
-        result = preview_task_shift(cycle_task, **parsed)
-        return Response(result, status=status.HTTP_200_OK)
+        if delay_days > 0:
+            cycle_task.calculated_start_date += timedelta(days=delay_days)
+            cycle_task.calculated_end_date += timedelta(days=delay_days)
+            cycle_task.status = "delayed"
+            cycle_task.save(
+                update_fields=["calculated_start_date", "calculated_end_date", "status"]
+            )
+
+        # The delay must propagate through the whole dependency chain,
+        # not just this one task — recompute the entire cycle's
+        # schedule in one pass.
+        _, circular_names, conflict_names = recompute_cycle_schedule(cycle_task.cycle)
+
+        cycle_task.refresh_from_db()
+        response_data = self.get_serializer(cycle_task).data
+        if circular_names or conflict_names:
+            response_data["schedule_warnings"] = {
+                "circular_dependency_tasks": circular_names,
+                "fixed_date_conflicts": conflict_names,
+            }
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
     def shift(self, request, pk=None):
         cycle_task = self.get_object()
-        try:
-            assert_cycle_is_running(cycle_task.cycle)
-        except CycleNotRunning as exc:
-            raise CycleFrozen(exc.message)
-        parsed, error_response = self._parse_shift_input(request)
-        if error_response:
-            return error_response
+        _, circular_names, conflict_names = recompute_cycle_schedule(cycle_task.cycle)
 
-        scope = request.data.get("scope", "single")
-        if scope not in ("single", "cascade"):
-            return Response(
-                {"scope": ["Must be 'single' or 'cascade'."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        override_fixed = bool(request.data.get("override_fixed", False))
-
-        try:
-            with transaction.atomic():
-                result = apply_task_shift(
-                    cycle_task, scope, override_fixed=override_fixed, **parsed
-                )
-        except DependencyConflict as exc:
-            return Response(exc.as_response_payload(), status=status.HTTP_409_CONFLICT)
+        cycle_task.refresh_from_db()
+        response_data = self.get_serializer(cycle_task).data
+        if circular_names or conflict_names:
+            response_data["schedule_warnings"] = {
+                "circular_dependency_tasks": circular_names,
+                "fixed_date_conflicts": conflict_names,
+            }
+        return Response(response_data, status=status.HTTP_200_OK)
 
         return Response(
             {
@@ -234,28 +293,13 @@ class CycleActivityViewSet(viewsets.ModelViewSet):
         owned_cycle_ids = CycleInstance.objects.filter(
             owned_cycles_q(self.request.user)
         ).values("pk")
-        return CycleActivity.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
-    
-    def perform_create(self, serializer):
-        from rest_framework.exceptions import PermissionDenied
+        queryset = CycleActivity.objects.filter(cycle_id__in=owned_cycle_ids).distinct()
 
-        cycle = serializer.validated_data["cycle"]
+        cycle_id = self.request.query_params.get("cycle")
+        if cycle_id:
+            queryset = queryset.filter(cycle_id=cycle_id)
 
-        if cycle.user_id != self.request.user.id:
-            raise PermissionDenied(
-                "You do not have permission to attach an activity to this cycle."
-            )
-
-        serializer.save()
-
-    def perform_update(self, serializer):
-        # Only the dates are writable here (see CycleActivitySerializer),
-        # but a frozen cycle still needs to block those too.
-        try:
-            assert_cycle_is_running(serializer.instance.cycle)
-        except CycleNotRunning as exc:
-            raise CycleFrozen(exc.message)
-        serializer.save()
+        return queryset
 
 
 class TaskDependencyViewSet(viewsets.ModelViewSet):
@@ -303,16 +347,3 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("You do not have permission to modify this template.")
-
-    def _validate_dependency_graph(self, task, depends_on_task, exclude_dependency_id=None):
-        from rest_framework.exceptions import ValidationError
-
-        if would_create_cycle(task, depends_on_task):
-            raise ValidationError(
-                {"depends_on_task": ["This dependency would create a circular chain."]}
-            )
-        try:
-            check_offset_conflict(task, depends_on_task)
-            assert_dependent_capacity(depends_on_task, exclude_dependency_id=exclude_dependency_id)
-        except DependencyConflict as exc:
-            raise ValidationError({"depends_on_task": [exc.message]})

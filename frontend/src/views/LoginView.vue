@@ -115,6 +115,8 @@ async function submit() {
 </template>
 
 <style scoped>
+form { width: 100%; }
+
 .form-title {
   font-size: 22px;
   font-weight: 600;
@@ -153,7 +155,7 @@ async function submit() {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -166,7 +168,7 @@ async function submit() {
 }
 
 .forgot-link {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--violet);
   font-weight: 500;
 }
@@ -174,16 +176,16 @@ async function submit() {
 .divider {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   margin: 22px 0;
 }
 
 .divider-line { flex: 1; height: 1px; background: var(--border-light); }
-.divider-text { font-size: 12px; color: var(--text-muted); }
+.divider-text { font-size: 14px; color: var(--text-muted); }
 
 .bottom-link {
   text-align: center;
-  font-size: 13px;
+  font-size: 14px;
   margin: 0;
 }
 

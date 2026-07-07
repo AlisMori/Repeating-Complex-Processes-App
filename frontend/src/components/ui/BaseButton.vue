@@ -50,19 +50,18 @@ defineProps({
   cursor: pointer;
   transition: background var(--transition-fast), opacity var(--transition-fast), transform 0.1s;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .base-btn:active:not(:disabled) { transform: scale(0.98); }
 .base-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* SIZES */
-.btn-sm { height: 32px; padding: 0 12px; font-size: 13.5px; }
-.btn-md { height: 40px; padding: 0 16px; font-size: 14.5px; }
-.btn-lg { height: 46px; padding: 0 20px; font-size: 15.5px; }
+.btn-sm { height: var(--btn-height-sm); padding: 0 28px; font-size: var(--btn-font-sm); min-width: 100px; }
+.btn-md { height: var(--btn-height-md); padding: 0 36px; font-size: var(--btn-font-md); min-width: 120px; }
+.btn-lg { height: var(--btn-height-lg); padding: 0 44px; font-size: var(--btn-font-lg); min-width: 140px; }
 
 /* FULL WIDTH */
-.btn-full { width: 100%; }
+.btn-full { display: flex; width: 100% !important; min-width: unset !important; }
 
 /* VARIANTS */
 .btn-primary {
