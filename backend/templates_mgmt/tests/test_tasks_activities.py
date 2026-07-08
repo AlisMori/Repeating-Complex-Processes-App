@@ -188,3 +188,29 @@ class TaskActivityManagementTests(APITestCase):
             1
         )
 
+    def test_create_template_task_with_activity_link(self):
+        activity = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Activity Container",
+            start_offset_days=1,
+            end_offset_days=3,
+        )
+
+        url = reverse("template-tasks-list")
+
+        data = {
+            "template": self.template.template_id,
+            "template_activity": activity.template_activity_id,
+            "task_name": "Linked Task",
+            "description": "Task linked to activity",
+            "day_offset": 1,
+            "duration_days": 2,
+        }
+
+        response = self.client.post(url, data)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        task = TemplateTask.objects.get(task_name="Linked Task")
+        self.assertEqual(task.template_activity, activity)
+

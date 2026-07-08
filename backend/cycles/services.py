@@ -3,12 +3,6 @@ from datetime import timedelta
 from .models import CycleActivity, CycleTask
 
 
-# Date calculation (7.4)
-# Templates store relative day offsets from the cycle start date (FR-4).
-# These two functions are the single source of truth for turning those
-# offsets into absolute calendar dates, so cascade recalculation (Module 8)
-# and runtime generation (below) always agree on how dates are derived.
-
 def calculate_task_dates(cycle_start_date, day_offset, duration_days):
     """Convert a TEMPLATE_TASK's day_offset/duration into absolute dates."""
     start = cycle_start_date + timedelta(days=day_offset)
@@ -23,11 +17,37 @@ def calculate_activity_dates(cycle_start_date, start_offset_days, end_offset_day
     return start, end
 
 
-# Runtime record generation (7.2, 7.3)
+def generate_cycle_activities(cycle):
+    """Copy TEMPLATE_ACTIVITY records into runtime CYCLE_ACTIVITY records."""
+    created_activities = []
+    activity_map = {}
 
-def generate_cycle_tasks(cycle):
-    """Copy every TEMPLATE_TASK on the cycle's template into runtime CYCLE_TASK records."""
+    for template_activity in cycle.template.template_activities.all():
+        start, end = calculate_activity_dates(
+            cycle.start_date,
+            template_activity.start_offset_days,
+            template_activity.end_offset_days,
+        )
+
+        cycle_activity = CycleActivity.objects.create(
+            cycle=cycle,
+            template_activity=template_activity,
+            activity_name=template_activity.activity_name,
+            calculated_start_date=start,
+            calculated_end_date=end,
+            note_text=template_activity.note_text,
+        )
+
+        created_activities.append(cycle_activity)
+        activity_map[template_activity.template_activity_id] = cycle_activity
+
+    return created_activities, activity_map
+
+
+def generate_cycle_tasks(cycle, activity_map=None):
+    """Copy TEMPLATE_TASK records into runtime CYCLE_TASK records."""
     created_tasks = []
+    activity_map = activity_map or {}
 
     for template_task in cycle.template.template_tasks.all():
         start, end = calculate_task_dates(
@@ -35,10 +55,16 @@ def generate_cycle_tasks(cycle):
             template_task.day_offset,
             template_task.duration_days,
         )
+
+        cycle_activity = None
+        if template_task.template_activity_id:
+            cycle_activity = activity_map.get(template_task.template_activity_id)
+
         created_tasks.append(
             CycleTask.objects.create(
                 cycle=cycle,
                 template_task=template_task,
+                cycle_activity=cycle_activity,
                 task_name=template_task.task_name,
                 calculated_start_date=start,
                 calculated_end_date=end,
@@ -52,33 +78,12 @@ def generate_cycle_tasks(cycle):
     return created_tasks
 
 
-def generate_cycle_activities(cycle):
-    """Copy every TEMPLATE_ACTIVITY on the cycle's template into runtime CYCLE_ACTIVITY records."""
-    created_activities = []
-
-    for template_activity in cycle.template.template_activities.all():
-        start, end = calculate_activity_dates(
-            cycle.start_date,
-            template_activity.start_offset_days,
-            template_activity.end_offset_days,
-        )
-        created_activities.append(
-            CycleActivity.objects.create(
-                cycle=cycle,
-                template_activity=template_activity,
-                activity_name=template_activity.activity_name,
-                calculated_start_date=start,
-                calculated_end_date=end,
-                note_text=template_activity.note_text,
-            )
-        )
-
-    return created_activities
-
-
 def generate_cycle_runtime_records(cycle):
-    """Generate both runtime tasks and activities for a freshly created cycle (FR-4)."""
+    """Generate runtime tasks and activities for a freshly created cycle."""
+    cycle_activities, activity_map = generate_cycle_activities(cycle)
+    cycle_tasks = generate_cycle_tasks(cycle, activity_map)
+
     return {
-        "cycle_tasks": generate_cycle_tasks(cycle),
-        "cycle_activities": generate_cycle_activities(cycle),
+        "cycle_tasks": cycle_tasks,
+        "cycle_activities": cycle_activities,
     }
