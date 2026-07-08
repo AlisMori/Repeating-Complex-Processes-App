@@ -48,6 +48,21 @@ from .serializers import (
 
 User = get_user_model()
 
+def recalculate_activity_offsets(activity):
+    linked_tasks = activity.template_tasks.all()
+
+    if not linked_tasks.exists():
+        return
+
+    start_offset = min(task.day_offset for task in linked_tasks)
+    end_offset = max(
+        task.day_offset + (task.duration_days or 0)
+        for task in linked_tasks
+    )
+
+    activity.start_offset_days = start_offset
+    activity.end_offset_days = end_offset
+    activity.save(update_fields=["start_offset_days", "end_offset_days"])
 
 class TemplateViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateSerializer
@@ -475,15 +490,28 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         template = serializer.validated_data["template"]
+
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
-        serializer.save()
+
+        task = serializer.save()
+
+        if task.template_activity:
+            recalculate_activity_offsets(task.template_activity)
 
     def perform_update(self, serializer):
-        template = serializer.validated_data.get("template", serializer.instance.template)
+        template = serializer.validated_data.get(
+            "template",
+            serializer.instance.template,
+        )
+
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
+
+        old_activity = serializer.instance.template_activity
+
         task = serializer.save()
+
         try:
             revalidate_task_offsets(task)
         except DependencyConflict as exc:
@@ -491,6 +519,18 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
 
             raise ValidationError({"day_offset": [exc.message]})
 
+        if old_activity:
+            recalculate_activity_offsets(old_activity)
+
+        if task.template_activity and task.template_activity != old_activity:
+            recalculate_activity_offsets(task.template_activity)
+
+    def perform_destroy(self, instance):
+        activity = instance.template_activity
+        instance.delete()
+
+        if activity:
+            recalculate_activity_offsets(activity)
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivitySerializer
