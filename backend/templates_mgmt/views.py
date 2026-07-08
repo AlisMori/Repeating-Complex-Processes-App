@@ -15,17 +15,8 @@ from core.permissions import (
     user_can_access_template,
     user_can_edit_template,
 )
-
 from cycles.models import CycleActivity, CycleInstance, CycleTask, TaskDependency
-from cycles.dependency_engine import (
-    DependencyConflict,
-    assert_dependent_capacity,
-    check_offset_conflict,
-    copy_dependencies,
-    revalidate_task_offsets,
-    would_create_cycle,
-)
-
+from .scheduling import resolve_effective_offsets
 from .models import (
     Template,
     TemplateTask,
@@ -124,15 +115,130 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 start_date=parsed_start_date,
             )
 
-            generate_cycle_runtime_records(cycle)
+            template_tasks = list(template.template_tasks.all())
+            nodes = {
+                t.template_task_id: {
+                    "offset": t.day_offset,
+                    "duration": t.duration_days or 1,
+                    "fixed": t.is_fixed_date,
+                }
+                for t in template_tasks
+            }
+            edges = {}
+            for dep in TaskDependency.objects.filter(task__template=template):
+                edges.setdefault(dep.task_id, []).append(dep.depends_on_task_id)
 
-        return Response(
-            CycleInstanceSerializer(
-                cycle,
-                context=self.get_serializer_context(),
-            ).data,
-            status=status.HTTP_201_CREATED,
-        )
+            effective, circular, conflicts = resolve_effective_offsets(nodes, edges)
+
+            for template_task in template_tasks:
+                eff_start, eff_end = effective.get(
+                    template_task.template_task_id,
+                    (template_task.day_offset, template_task.day_offset + (template_task.duration_days or 1)),
+                )
+                start = cycle.start_date + timedelta(days=eff_start)
+                end = cycle.start_date + timedelta(days=eff_end)
+                CycleTask.objects.create(
+                    cycle=cycle,
+                    template_task=template_task,
+                    task_name=template_task.task_name,
+                    calculated_start_date=start,
+                    calculated_end_date=end,
+                    is_mandatory=template_task.is_mandatory,
+                    is_fixed_date=template_task.is_fixed_date,
+                    reminder_lead_days=template_task.reminder_lead_days,
+                    note_text=template_task.note_text,
+                )
+
+            for template_activity in template.template_activities.all():
+                CycleActivity.objects.create(
+                    cycle=cycle,
+                    template_activity=template_activity,
+                    activity_name=template_activity.activity_name,
+                    calculated_start_date=cycle.start_date + timedelta(days=template_activity.start_offset_days),
+                    calculated_end_date=cycle.start_date + timedelta(days=template_activity.end_offset_days),
+                    note_text=template_activity.note_text,
+                )
+
+        from cycles.serializers import CycleInstanceSerializer
+
+        response_data = CycleInstanceSerializer(cycle, context=self.get_serializer_context()).data
+        if circular or conflicts:
+            id_to_name = {t.template_task_id: t.task_name for t in template_tasks}
+            response_data["schedule_warnings"] = {
+                "circular_dependency_tasks": [id_to_name.get(tid, tid) for tid in circular],
+                "fixed_date_conflicts": [id_to_name.get(tid, tid) for tid in conflicts],
+            }
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"])
+    def timeline_preview(self, request, pk=None):
+        """
+        Returns the dependency-resolved timeline for this template:
+        every task/activity's effective start/end day once dependency
+        chains are accounted for. This is the same resolution
+        create_cycle uses, so a template's preview always matches
+        what a cycle created from it will actually look like.
+        """
+        template = self.get_object()
+        if not user_can_access_template(request.user, template):
+            raise PermissionDenied("You do not have permission to view this template.")
+
+        template_tasks = list(template.template_tasks.all())
+        template_activities = list(template.template_activities.all())
+
+        nodes = {
+            t.template_task_id: {
+                "offset": t.day_offset,
+                "duration": t.duration_days or 1,
+                "fixed": t.is_fixed_date,
+            }
+            for t in template_tasks
+        }
+        edges = {}
+        dep_name_by_task_id = {}
+        for dep in TaskDependency.objects.filter(task__template=template).select_related("depends_on_task"):
+            edges.setdefault(dep.task_id, []).append(dep.depends_on_task_id)
+            dep_name_by_task_id[dep.task_id] = dep.depends_on_task.task_name
+
+        effective, circular, conflicts = resolve_effective_offsets(nodes, edges)
+
+        task_bars = []
+        for t in template_tasks:
+            start, end = effective.get(
+                t.template_task_id,
+                (t.day_offset, t.day_offset + (t.duration_days or 1)),
+            )
+            task_bars.append({
+                "template_task_id": t.template_task_id,
+                "name": t.task_name,
+                "start": start,
+                "end": end,
+                "is_mandatory": t.is_mandatory,
+                "is_fixed_date": t.is_fixed_date,
+                "dep_name": dep_name_by_task_id.get(t.template_task_id),
+                "has_circular_dependency": t.template_task_id in circular,
+                "has_fixed_date_conflict": t.template_task_id in conflicts,
+            })
+
+        activity_bars = [
+            {
+                "template_activity_id": a.template_activity_id,
+                "name": a.activity_name,
+                "start": a.start_offset_days,
+                "end": a.end_offset_days,
+            }
+            for a in template_activities
+        ]
+
+        all_ends = [b["end"] for b in task_bars] + [b["end"] for b in activity_bars]
+        max_day = max(all_ends) if all_ends else 1
+
+        return Response({
+            "task_bars": task_bars,
+            "activity_bars": activity_bars,
+            "max_day": max_day,
+        })
 
     @action(detail=True, methods=["get"])
     def export(self, request, pk=None):
@@ -597,5 +703,3 @@ class TemplateActivityTagViewSet(viewsets.ModelViewSet):
         return TemplateActivityTag.objects.filter(
             template_activity__template__user=self.request.user
         )
-
-

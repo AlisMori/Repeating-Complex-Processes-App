@@ -14,8 +14,8 @@ defineProps({
   <div class="logo-area">
     <div class="logo-icon" :style="{ width: size + 'px', height: size + 'px' }">
       <svg
-        :width="size * 0.7"
-        :height="size * 0.7"
+        :width="size * 0.82"
+        :height="size * 0.82"
         viewBox="0 0 40 40"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"

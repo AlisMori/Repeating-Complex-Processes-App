@@ -1,6 +1,16 @@
-// /frontend/src/router/index.js
-
 import { createRouter, createWebHistory } from 'vue-router'
+import DashboardView from '../views/DashboardView.vue'
+import LoginView from '../views/LoginView.vue'
+import RegisterView from '../views/RegisterView.vue'
+import PasswordResetRequestView from '../views/PasswordResetRequestView.vue'
+import PasswordResetConfirmView from '../views/PasswordResetConfirmView.vue'
+import CyclesListView from '../views/CyclesListView.vue'
+import CycleCreateView from '../views/CycleCreateView.vue'
+import CycleDetailView from '../views/CycleDetailView.vue'
+import TemplateLibraryView from '../views/TemplateLibraryView.vue'
+import TemplateCreateView from '../views/TemplateCreateView.vue'
+import TemplateDetailView from '../views/TemplateDetailView.vue'
+import AccountSettingsView from '../views/AccountSettingsView.vue'
 import { useAuthStore } from '../stores/auth'
 import pinia from '../stores'
 import TemplatesView from '../views/TemplatesView.vue'
@@ -10,66 +20,71 @@ import TemplateActivitiesView from '../views/TemplateActivitiesView.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-
-    // ── AUTH ROUTES (guest only) ──────────────────────────────
     {
-      path: '/auth/login',
-      name: 'login',
-      component: () => import('../views/LoginView.vue'),
-      meta: { guestOnly: true },
+      // No public landing page — send straight into the app.
+      // The router guard below bounces unauthenticated users on
+      // to /auth/login automatically.
+      path: '/',
+      redirect: { name: 'login' },
+    },
+    {
+      path: '/auth',
+      redirect: { name: 'login' },
     },
     {
       path: '/auth/register',
       name: 'register',
-      component: () => import('../views/RegisterView.vue'),
+      component: RegisterView,
+      meta: { guestOnly: true },
+    },
+    {
+      path: '/auth/login',
+      name: 'login',
+      component: LoginView,
       meta: { guestOnly: true },
     },
     {
       path: '/auth/password-reset',
       name: 'forgot-password',
-      component: () => import('../views/PasswordResetRequestView.vue'),
+      component: PasswordResetRequestView,
     },
     {
       path: '/auth/password-reset/confirm',
       name: 'password-reset-confirm',
-      component: () => import('../views/PasswordResetConfirmView.vue'),
+      component: PasswordResetConfirmView,
     },
-
-    // ── REDIRECT ROOT ─────────────────────────────────────────
     {
-      path: '/',
+      path: '/auth/test',
       redirect: { name: 'dashboard' },
     },
-
-    // ── MAIN APP ROUTES (auth required) ──────────────────────
     {
       path: '/dashboard',
       name: 'dashboard',
-      component: () => import('../views/DashboardView.vue'),
+      component: DashboardView,
       meta: { requiresAuth: true },
     },
     {
       path: '/cycles',
       name: 'cycles',
-      component: () => import('../views/CyclesListView.vue'),
+      component: CyclesListView,
       meta: { requiresAuth: true },
     },
     {
       path: '/cycles/new',
       name: 'cycle-create',
-      component: () => import('../views/CycleCreateView.vue'),
+      component: CycleCreateView,
       meta: { requiresAuth: true },
     },
     {
       path: '/cycles/:id',
       name: 'cycle-detail',
-      component: () => import('../views/CycleDetailView.vue'),
+      component: CycleDetailView,
       meta: { requiresAuth: true },
     },
     {
       path: '/templates',
       name: 'templates',
-      component: () => import('../views/TemplateLibraryView.vue'),
+      component: TemplateLibraryView,
       meta: { requiresAuth: true },
     },
     {
@@ -90,24 +105,28 @@ const router = createRouter({
 
       path: '/templates/new',
       name: 'template-create',
-      component: () => import('../views/TemplateCreateView.vue'),
+      component: TemplateCreateView,
       meta: { requiresAuth: true },
 
     },
     {
       path: '/templates/:id',
       name: 'template-detail',
-      component: () => import('../views/TemplateCreateView.vue'),
+      component: TemplateDetailView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/templates/:id/edit',
+      name: 'template-edit',
+      component: TemplateCreateView,
       meta: { requiresAuth: true },
     },
     {
       path: '/settings',
       name: 'account-settings',
-      component: () => import('../views/AccountSettingsView.vue'),
+      component: AccountSettingsView,
       meta: { requiresAuth: true },
     },
-
-    // ── FALLBACK ──────────────────────────────────────────────
     {
       path: '/:pathMatch(.*)*',
       redirect: { name: 'dashboard' },
@@ -123,6 +142,7 @@ router.beforeEach((to) => {
       authStore.handleSessionExpired('Please log in to continue.')
       return { name: 'login' }
     }
+
     if (authStore.isAccessTokenExpired()) {
       authStore.handleSessionExpired()
       return { name: 'login' }

@@ -20,9 +20,7 @@
 
   .app-layout .sidebar .nav-label,
   .app-layout .sidebar .logo-text,
-  .app-layout .sidebar .nav-section-label,
-  .app-layout .sidebar .user-info,
-  .app-layout .sidebar .nav-badge {
+  .app-layout .sidebar .user-info {
     display: none;
   }
 
@@ -36,8 +34,8 @@
     padding: 10px 0;
   }
 
-  .app-layout .main-content {
-    margin-left: 64px;
+  .app-layout .main-area {
+    margin-left: 0;
   }
 }
 

@@ -121,7 +121,7 @@ defineProps({
 .brand-content { margin-top: 52px; }
 
 .brand-headline {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 600;
   color: #3B0764;
   line-height: 1.3;
@@ -130,7 +130,7 @@ defineProps({
 }
 
 .brand-tagline {
-  font-size: 13.5px;
+  font-size: 16px;
   color: #5B21B6;
   line-height: 1.7;
   opacity: 0.8;
@@ -150,7 +150,7 @@ defineProps({
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
+  font-size: 15px;
   color: #5B21B6;
 }
 
@@ -170,7 +170,7 @@ defineProps({
   gap: 7px;
   background: rgba(34,197,94,0.12);
   color: #15803D;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   padding: 4px 11px;
   border-radius: 20px;
@@ -185,7 +185,7 @@ defineProps({
 }
 
 .footer-note {
-  font-size: 11.5px;
+  font-size: 12px;
   color: #5B21B6;
   opacity: 0.5;
   margin: 0;

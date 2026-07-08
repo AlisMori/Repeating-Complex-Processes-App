@@ -17,6 +17,8 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   autocomplete: { type: String, default: 'off' },
   id: { type: String, default: '' },
+  min: { type: [String, Number], default: undefined },
+  max: { type: [String, Number], default: undefined },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -59,6 +61,8 @@ const inputId = computed(() => props.id || `input-${Math.random().toString(36).s
         :required="required"
         :disabled="disabled"
         :autocomplete="autocomplete"
+        :min="min"
+        :max="max"
         @input="emit('update:modelValue', $event.target.value)"
       />
 
@@ -101,7 +105,7 @@ const inputId = computed(() => props.id || `input-${Math.random().toString(36).s
 }
 
 .input-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
   display: flex;
@@ -123,11 +127,11 @@ const inputId = computed(() => props.id || `input-${Math.random().toString(36).s
 
 .base-input {
   width: 100%;
-  height: 42px;
+  height: 44px;
   padding: 0 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  font-size: 14px;
+  font-size: 15px;
   font-family: var(--font-main);
   background: #FAFAFA;
   color: var(--text-primary);

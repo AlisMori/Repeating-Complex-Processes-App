@@ -213,4 +213,93 @@ class TaskActivityManagementTests(APITestCase):
 
         task = TemplateTask.objects.get(task_name="Linked Task")
         self.assertEqual(task.template_activity, activity)
+    def test_list_template_tasks_filters_by_template(self):
+        """
+        GET /template-tasks/?template=<id> must only return tasks
+        belonging to that template — not every task across every
+        template the user can access.
+        """
+        other_template = Template.objects.create(
+            user=self.user,
+            template_name="Other Template",
+            description="A different template owned by the same user",
+        )
+
+        task_in_first = TemplateTask.objects.create(
+            template=self.template,
+            task_name="Task in first template",
+            day_offset=1,
+        )
+        TemplateTask.objects.create(
+            template=other_template,
+            task_name="Task in other template",
+            day_offset=2,
+        )
+
+        url = reverse("template-tasks-list")
+        response = self.client.get(url, {"template": self.template.template_id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {row["template_task_id"] for row in response.data}
+        self.assertEqual(returned_ids, {task_in_first.template_task_id})
+
+    def test_list_template_activities_filters_by_template(self):
+        """
+        GET /template-activities/?template=<id> must only return
+        activities belonging to that template — not every activity
+        across every template the user can access.
+        """
+        other_template = Template.objects.create(
+            user=self.user,
+            template_name="Other Template",
+            description="A different template owned by the same user",
+        )
+
+        activity_in_first = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Activity in first template",
+            start_offset_days=1,
+            end_offset_days=2,
+        )
+        TemplateActivity.objects.create(
+            template=other_template,
+            activity_name="Activity in other template",
+            start_offset_days=1,
+            end_offset_days=2,
+        )
+
+        url = reverse("template-activities-list")
+        response = self.client.get(url, {"template": self.template.template_id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {row["template_activity_id"] for row in response.data}
+        self.assertEqual(returned_ids, {activity_in_first.template_activity_id})
+
+    def test_list_template_tasks_without_filter_still_scoped_to_user(self):
+        """
+        Without a ?template= filter, the endpoint should still only
+        ever return tasks the user can access (existing access-control
+        behaviour) — this filter is additive, not a replacement.
+        """
+        other_user = User.objects.create_user(
+            username="otheruser",
+            email="other@test.com",
+            password="test123",
+        )
+        other_users_template = Template.objects.create(
+            user=other_user,
+            template_name="Not mine",
+        )
+        TemplateTask.objects.create(
+            template=other_users_template,
+            task_name="Should not be visible",
+            day_offset=1,
+        )
+
+        url = reverse("template-tasks-list")
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_names = {row["task_name"] for row in response.data}
+        self.assertNotIn("Should not be visible", returned_names)
 

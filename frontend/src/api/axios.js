@@ -16,20 +16,19 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  if (!config.requiresAuth) {
-    return config
-  }
-
   const accessToken = getAccessToken()
-  if (!accessToken || isAccessTokenExpired()) {
+
+  if (accessToken && !isAccessTokenExpired()) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${accessToken}`
+  } else if (config.requiresAuth) {
+    // Only block the request if it explicitly requires auth
     onUnauthorized()
     const error = new Error('Your session has expired. Please log in again.')
     error.code = 'AUTH_SESSION_EXPIRED'
     return Promise.reject(error)
   }
 
-  config.headers = config.headers || {}
-  config.headers.Authorization = `Bearer ${accessToken}`
   return config
 })
 
