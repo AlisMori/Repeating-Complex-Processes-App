@@ -430,16 +430,16 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         template = serializer.validated_data.get("template", serializer.instance.template)
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
-        
-        task = serializer.save()
-        expand_activity_to_include_task(task)
 
-        try:
-            revalidate_task_offsets(task)
-        except DependencyConflict as exc:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({"day_offset": [exc.message]})
-        
+        with transaction.atomic():
+            task = serializer.save()
+
+            try:
+                revalidate_task_offsets(task)
+            except DependencyConflict as exc:
+                raise ValidationError({"day_offset": [exc.message]})
+
+            expand_activity_to_include_task(task)
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivitySerializer
