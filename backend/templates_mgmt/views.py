@@ -5,6 +5,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 
@@ -14,6 +15,11 @@ from core.permissions import (
     accessible_templates_q,
     user_can_access_template,
     user_can_edit_template,
+)
+from cycles.dependency_engine import (
+    DependencyConflict,
+    copy_dependencies,
+    revalidate_task_offsets,
 )
 from cycles.models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .scheduling import resolve_effective_offsets
@@ -90,6 +96,19 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 cycle_name=cycle_name,
                 start_date=parsed_start_date,
             )
+            activity_map = {}
+
+            for template_activity in template.template_activities.all():
+                cycle_activity = CycleActivity.objects.create(
+                    cycle=cycle,
+                    template_activity=template_activity,
+                    activity_name=template_activity.activity_name,
+                    calculated_start_date=cycle.start_date + timedelta(days=template_activity.start_offset_days),
+                    calculated_end_date=cycle.start_date + timedelta(days=template_activity.end_offset_days),
+                    note_text=template_activity.note_text,
+                )
+
+                activity_map[template_activity.template_activity_id] = cycle_activity
 
             template_tasks = list(template.template_tasks.all())
             nodes = {
@@ -123,17 +142,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     is_fixed_date=template_task.is_fixed_date,
                     reminder_lead_days=template_task.reminder_lead_days,
                     note_text=template_task.note_text,
+                    cycle_activity=activity_map.get(template_task.template_activity_id),
                 )
 
-            for template_activity in template.template_activities.all():
-                CycleActivity.objects.create(
-                    cycle=cycle,
-                    template_activity=template_activity,
-                    activity_name=template_activity.activity_name,
-                    calculated_start_date=cycle.start_date + timedelta(days=template_activity.start_offset_days),
-                    calculated_end_date=cycle.start_date + timedelta(days=template_activity.end_offset_days),
-                    note_text=template_activity.note_text,
-                )
 
         from cycles.serializers import CycleInstanceSerializer
 
@@ -391,14 +402,15 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         template = serializer.validated_data.get("template", serializer.instance.template)
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
+        
         task = serializer.save()
+
         try:
             revalidate_task_offsets(task)
         except DependencyConflict as exc:
             from rest_framework.exceptions import ValidationError
-
             raise ValidationError({"day_offset": [exc.message]})
-
+        
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivitySerializer

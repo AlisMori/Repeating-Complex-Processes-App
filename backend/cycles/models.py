@@ -52,6 +52,13 @@ class CycleTask(models.Model):
         on_delete=models.CASCADE,
         related_name="cycle_tasks"
     )
+    cycle_activity = models.ForeignKey(
+        "CycleActivity",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cycle_tasks",
+    )
     task_name = models.CharField(max_length=100)
     calculated_start_date = models.DateField()
     calculated_end_date = models.DateField()

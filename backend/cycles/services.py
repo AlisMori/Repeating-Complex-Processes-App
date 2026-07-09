@@ -78,7 +78,38 @@ def generate_cycle_activities(cycle):
 
 def generate_cycle_runtime_records(cycle):
     """Generate both runtime tasks and activities for a freshly created cycle (FR-4)."""
+    created_activities = generate_cycle_activities(cycle)
+
+    activity_map = {
+        activity.template_activity_id: activity
+        for activity in created_activities
+    }
+
+    created_tasks = []
+
+    for template_task in cycle.template.template_tasks.all():
+        start, end = calculate_task_dates(
+            cycle.start_date,
+            template_task.day_offset,
+            template_task.duration_days,
+        )
+
+        created_tasks.append(
+            CycleTask.objects.create(
+                cycle=cycle,
+                template_task=template_task,
+                cycle_activity=activity_map.get(template_task.template_activity_id),
+                task_name=template_task.task_name,
+                calculated_start_date=start,
+                calculated_end_date=end,
+                is_mandatory=template_task.is_mandatory,
+                is_fixed_date=template_task.is_fixed_date,
+                reminder_lead_days=template_task.reminder_lead_days,
+                note_text=template_task.note_text,
+            )
+        )
+
     return {
-        "cycle_tasks": generate_cycle_tasks(cycle),
-        "cycle_activities": generate_cycle_activities(cycle),
+        "cycle_tasks": created_tasks,
+        "cycle_activities": created_activities,
     }
