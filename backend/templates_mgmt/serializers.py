@@ -64,7 +64,12 @@ class TemplateTaskSerializer(serializers.ModelSerializer):
         duration = attrs.get("duration_days", getattr(self.instance, "duration_days", None))
         task_end = task_start + (duration or 0) if task_start is not None else None
 
-        if template_activity and task_start is not None and task_end is not None:
+        if (
+            self.instance is None
+            and template_activity
+            and task_start is not None
+            and task_end is not None
+        ):
             if (
                 task_start < template_activity.start_offset_days
                 or task_end > template_activity.end_offset_days

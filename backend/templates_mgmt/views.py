@@ -45,6 +45,28 @@ from .serializers import (
 
 User = get_user_model()
 
+def expand_activity_to_include_task(task):
+    activity = task.template_activity
+
+    if activity is None:
+        return
+
+    task_start = task.day_offset
+    task_end = task.day_offset + (task.duration_days or 0)
+
+    updated_fields = []
+
+    if task_start < activity.start_offset_days:
+        activity.start_offset_days = task_start
+        updated_fields.append("start_offset_days")
+
+    if task_end > activity.end_offset_days:
+        activity.end_offset_days = task_end
+        updated_fields.append("end_offset_days")
+
+    if updated_fields:
+        activity.save(update_fields=updated_fields)
+
 
 class TemplateViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateSerializer
@@ -337,6 +359,19 @@ class TemplateViewSet(viewsets.ModelViewSet):
             )
             
             activity_map = {}
+
+            for activity in original_template.template_activities.all():
+                copied_activity = TemplateActivity.objects.create(
+                    template=shared_template,
+                    activity_name=activity.activity_name,
+                    description=activity.description,
+                    start_offset_days=activity.start_offset_days,
+                    end_offset_days=activity.end_offset_days,
+                    note_text=activity.note_text,
+                )
+
+                activity_map[activity.template_activity_id] = copied_activity
+
             task_map = {}
 
             for task in original_template.template_tasks.all():
@@ -352,23 +387,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     reminder_lead_days=task.reminder_lead_days,
                     note_text=task.note_text,
                 )
+
                 task_map[task.template_task_id] = copied_task
 
-            activity_map = {}
-
-            for activity in original_template.template_activities.all():
-                copied_activity = TemplateActivity.objects.create(
-                    template=shared_template,
-                    activity_name=activity.activity_name,
-                    description=activity.description,
-                    start_offset_days=activity.start_offset_days,
-                    end_offset_days=activity.end_offset_days,
-                    note_text=activity.note_text,
-                )
-
-                activity_map[activity.template_activity_id] = copied_activity
-
-            # Straight copy, same as duplicate(), no offset changes here.
             copy_dependencies(original_template, task_map)
 
         return Response(
@@ -402,7 +423,8 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         template = serializer.validated_data["template"]
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
-        serializer.save()
+        task = serializer.save()
+        expand_activity_to_include_task(task)
 
     def perform_update(self, serializer):
         template = serializer.validated_data.get("template", serializer.instance.template)
@@ -410,6 +432,7 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
         
         task = serializer.save()
+        expand_activity_to_include_task(task)
 
         try:
             revalidate_task_offsets(task)
@@ -449,6 +472,12 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
         serializer.save()
 
+    def perform_destroy(self, instance):
+        if not user_can_edit_template(self.request.user, instance.template):
+            raise PermissionDenied("You do not have permission to modify this template.")
+
+        instance.template_tasks.all().delete()
+        instance.delete()
 
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
