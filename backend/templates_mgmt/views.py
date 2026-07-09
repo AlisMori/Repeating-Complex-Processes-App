@@ -335,12 +335,14 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 template=shared_template,
                 access_type="shared",
             )
-
+            
+            activity_map = {}
             task_map = {}
 
             for task in original_template.template_tasks.all():
                 copied_task = TemplateTask.objects.create(
                     template=shared_template,
+                    template_activity=activity_map.get(task.template_activity_id),
                     task_name=task.task_name,
                     description=task.description,
                     day_offset=task.day_offset,
@@ -352,8 +354,10 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 )
                 task_map[task.template_task_id] = copied_task
 
+            activity_map = {}
+
             for activity in original_template.template_activities.all():
-                TemplateActivity.objects.create(
+                copied_activity = TemplateActivity.objects.create(
                     template=shared_template,
                     activity_name=activity.activity_name,
                     description=activity.description,
@@ -361,6 +365,8 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     end_offset_days=activity.end_offset_days,
                     note_text=activity.note_text,
                 )
+
+                activity_map[activity.template_activity_id] = copied_activity
 
             # Straight copy, same as duplicate(), no offset changes here.
             copy_dependencies(original_template, task_map)

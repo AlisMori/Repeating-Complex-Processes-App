@@ -55,6 +55,8 @@ class CycleInstanceEngineTests(APITestCase):
             end_offset_days=5,
             note_text="Runs alongside onboarding tasks"
         )
+        self.task.template_activity = self.activity
+        self.task.save(update_fields=["template_activity"])
 
     def test_create_cycle_from_template_produces_running_cycle(self):
         url = reverse("cycles-list")
@@ -197,3 +199,27 @@ class CycleInstanceEngineTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], "running")
+
+    def test_cycle_creation_copies_task_activity_relationship(self):
+        url = reverse("cycles-list")
+
+        data = {
+            "template": self.template.template_id,
+            "cycle_name": "June Cohort",
+            "start_date": "2026-07-01",
+        }
+
+        self.client.post(url, data)
+
+        cycle = CycleInstance.objects.first()
+
+        cycle_activity = CycleActivity.objects.get(
+            cycle=cycle,
+            activity_name="Orientation week",
+        )
+        cycle_task = CycleTask.objects.get(
+            cycle=cycle,
+            task_name="Sign contract",
+        )
+
+        self.assertEqual(cycle_task.cycle_activity, cycle_activity)
