@@ -62,39 +62,6 @@ class TemplateViewSet(viewsets.ModelViewSet):
             defaults={"access_type": "owner"},
         )
 
-    @action(detail=True, methods=["post"])
-    def share(self, request, pk=None):
-        template = self.get_object()
-        if not user_can_edit_template(request.user, template):
-            raise PermissionDenied("You do not have permission to share this template.")
-
-        target_user_id = request.data.get("user_id")
-        if not target_user_id:
-            return Response(
-                {"user_id": ["This field is required."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            target_user = User.objects.get(pk=target_user_id)
-        except User.DoesNotExist:
-            return Response(
-                {"user_id": ["User not found."]},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        relation, _ = UserTemplate.objects.update_or_create(
-            user=target_user,
-            template=template,
-            defaults={"access_type": "shared"},
-        )
-        return Response(
-            {
-                "message": "Template shared successfully.",
-                "user_template_id": relation.user_template_id,
-            },
-            status=status.HTTP_200_OK,
-        )
 
     @action(detail=True, methods=["post"])
     def create_cycle(self, request, pk=None):
@@ -265,6 +232,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
         ).data
         return Response(payload, status=status.HTTP_200_OK)
 
+
     def update(self, request, *args, **kwargs):
             original_template = self.get_object()
 
@@ -282,6 +250,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     created_by_type=original_template.created_by_type,
                     is_current_version=True,
                 )
+                task_id_map[task.template_task_id] = new_task
 
                 UserTemplate.objects.create(
                     user=request.user,
@@ -356,8 +325,10 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 access_type="shared",
             )
 
+            task_map = {}
+
             for task in original_template.template_tasks.all():
-                TemplateTask.objects.create(
+                copied_task = TemplateTask.objects.create(
                     template=shared_template,
                     task_name=task.task_name,
                     description=task.description,
@@ -368,6 +339,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     reminder_lead_days=task.reminder_lead_days,
                     note_text=task.note_text,
                 )
+                task_map[task.template_task_id] = copied_task
 
             for activity in original_template.template_activities.all():
                 TemplateActivity.objects.create(
@@ -378,6 +350,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     end_offset_days=activity.end_offset_days,
                     note_text=activity.note_text,
                 )
+
+            # Straight copy, same as duplicate(), no offset changes here.
+            copy_dependencies(original_template, task_map)
 
         return Response(
             {
@@ -416,7 +391,13 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         template = serializer.validated_data.get("template", serializer.instance.template)
         if not user_can_edit_template(self.request.user, template):
             raise PermissionDenied("You do not have permission to modify this template.")
-        serializer.save()
+        task = serializer.save()
+        try:
+            revalidate_task_offsets(task)
+        except DependencyConflict as exc:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"day_offset": [exc.message]})
 
 
 class TemplateActivityViewSet(viewsets.ModelViewSet):

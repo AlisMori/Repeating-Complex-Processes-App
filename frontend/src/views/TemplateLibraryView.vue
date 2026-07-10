@@ -7,6 +7,7 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore } from '@/stores/toast'
 import {
@@ -142,6 +143,13 @@ onMounted(async () => {
           />
         </div>
         <button type="button" class="page-help-btn" title="Show tips" @click="onboardingStore.startTour('templates')">
+      <div class="topbar-actions">
+        <SmartSearch
+          context="templates"
+          :default-scopes="['templates', 'tasks', 'activities', 'notes']"
+          placeholder="Search templates and notes..."
+        />
+        <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('templates')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
@@ -279,6 +287,7 @@ onMounted(async () => {
 .search-box svg { width: 14px; height: 14px; flex-shrink: 0; stroke: var(--text-muted); }
 .search-box input { border: none; background: transparent; font-size: var(--font-label); color: var(--text-primary); outline: none; width: 100%; font-family: var(--font-main); }
 .search-box input::placeholder { color: var(--text-muted); }
+.topbar-actions { margin-left: auto; display: flex; gap: 10px; align-items: center; min-width: 0; }
 
 .page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
 .page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }

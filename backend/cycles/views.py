@@ -1,7 +1,9 @@
 from datetime import date, timedelta
 
+from django.db import transaction
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import APIException
 from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 
@@ -17,6 +19,23 @@ from core.permissions import (
 from templates_mgmt.models import Template
 from templates_mgmt.scheduling import resolve_effective_offsets
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
+from .services import generate_cycle_runtime_records
+from .dependency_engine import (
+    DependencyConflict,
+    apply_task_shift,
+    assert_dependent_capacity,
+    check_offset_conflict,
+    preview_task_shift,
+    would_create_cycle,
+)
+from .task_status_engine import (
+    ALLOWED_TRANSITIONS,
+    CycleNotRunning,
+    InvalidStatusTransition,
+    assert_cycle_is_running,
+    maybe_complete_cycle,
+    validate_status_transition,
+)
 from .serializers import (
     CycleActivitySerializer,
     CycleInstanceSerializer,
@@ -99,11 +118,20 @@ class CycleInstanceViewSet(viewsets.ModelViewSet):
         return CycleInstance.objects.filter(owned_cycles_q(self.request.user)).distinct()
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        # FR-4: creating a cycle instance must also generate runtime copies of
+        # every task and activity on the chosen template, with absolute dates
+        # calculated from the cycle's start date (7.1, 7.2, 7.3, 7.4). Wrapped
+        # in a transaction so a partial failure never leaves an orphaned cycle
+        # with no runtime records.
+        with transaction.atomic():
+            cycle = serializer.save(user=self.request.user)
+            generate_cycle_runtime_records(cycle)
 
     @action(detail=True, methods=["post"])
     def shut_down(self, request, pk=None):
         cycle = self.get_object()
+        if cycle.status == "shut_down":
+            return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
         cycle.status = "shut_down"
         cycle.save(update_fields=["status"])
         return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
@@ -143,15 +171,71 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=True, methods=["post"])
-    def record_delay(self, request, pk=None):
+    def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        cycle = serializer.validated_data["cycle"]
+
+        if cycle.user_id != self.request.user.id:
+            raise PermissionDenied(
+                "You do not have permission to attach a task to this cycle."
+            )
+
+        serializer.save()
+
+    def perform_update(self, serializer):
+        # Module 9, FR-6.1/FR-6.4. Status is the only field this
+        # serializer allows through, everything else is read-only, so
+        # this only ever needs to check the transition itself.
+        cycle_task = serializer.instance
+        new_status = serializer.validated_data.get("status", cycle_task.status)
+
+        try:
+            assert_cycle_is_running(cycle_task.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
+
+        try:
+            validate_status_transition(cycle_task, new_status)
+        except InvalidStatusTransition as exc:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"status": [exc.message]})
+
+        updated = serializer.save()
+
+        if updated.status in ("completed", "skipped"):
+            maybe_complete_cycle(updated.cycle)
+    
+    @action(detail=True, methods=["get"])
+    def available_statuses(self, request, pk=None):
+        # Lets the frontend show exactly the right buttons for a task's
+        # current state without hardcoding the transition map client-side.
         cycle_task = self.get_object()
-        delay_days = int(request.data.get("delay_days", 0))
-        if delay_days < 0:
-            return Response(
-                {"delay_days": ["Delay days must be zero or greater."]},
+        return Response(
+            {
+                "current_status": cycle_task.status,
+                "available_statuses": sorted(ALLOWED_TRANSITIONS.get(cycle_task.status, set())),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def _parse_shift_input(self, request):
+        data = request.data
+        delay_days = data.get("delay_days")
+        new_start_date = data.get("new_start_date")
+        new_end_date = data.get("new_end_date")
+        if sum(v is not None for v in (delay_days, new_start_date, new_end_date)) != 1:
+            return None, Response(
+                {"non_field_errors": ["Provide exactly one of delay_days, new_start_date, new_end_date."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        parsed = {
+            "delay_days": int(delay_days) if delay_days is not None else None,
+            "new_start_date": date.fromisoformat(new_start_date) if new_start_date else None,
+            "new_end_date": date.fromisoformat(new_end_date) if new_end_date else None,
+        }
+        return parsed, None
 
         if delay_days > 0:
             cycle_task.calculated_start_date += timedelta(days=delay_days)
@@ -176,7 +260,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         return Response(response_data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"])
-    def recalculate_dependencies(self, request, pk=None):
+    def shift(self, request, pk=None):
         cycle_task = self.get_object()
         _, circular_names, conflict_names = recompute_cycle_schedule(cycle_task.cycle)
 
@@ -189,6 +273,15 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
             }
         return Response(response_data, status=status.HTTP_200_OK)
 
+        return Response(
+            {
+                "cycle_task_id": cycle_task.pk,
+                "scope": scope,
+                "shifted_tasks": result["shifted"],
+                "warnings": result["warnings"],
+            },
+            status=status.HTTP_200_OK,
+        )
 
 class CycleActivityViewSet(viewsets.ModelViewSet):
     serializer_class = CycleActivitySerializer
@@ -231,6 +324,7 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         task = serializer.validated_data["task"]
         depends_on_task = serializer.validated_data["depends_on_task"]
         self._validate_editable_dependency_tasks(task, depends_on_task)
+        self._validate_dependency_graph(task, depends_on_task)
         serializer.save()
 
     def perform_update(self, serializer):
@@ -240,6 +334,9 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
             serializer.instance.depends_on_task,
         )
         self._validate_editable_dependency_tasks(task, depends_on_task)
+        self._validate_dependency_graph(
+            task, depends_on_task, exclude_dependency_id=serializer.instance.pk
+        )
         serializer.save()
 
     def _validate_editable_dependency_tasks(self, task, depends_on_task):

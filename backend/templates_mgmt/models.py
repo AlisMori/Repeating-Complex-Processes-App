@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
-
+from django.contrib.postgres.fields import ArrayField
 
 # This model stores reusable process templates.
 # Template is the main blueprint that later can be used to create cycle instances.
@@ -99,6 +99,8 @@ class TemplateTask(models.Model):
         ordering = ["template_task_id"]
 
 
+
+
 # TemplateActivity stores non-actionable timeline activities inside a template.
 class TemplateActivity(models.Model):
     template_activity_id = models.AutoField(primary_key=True)
@@ -124,18 +126,45 @@ class TemplateActivity(models.Model):
 # This association model allows one task to have multiple tags.
 class TemplateTaskTag(models.Model):
     template_task_tag_id = models.AutoField(primary_key=True)
-    template_task = models.ForeignKey(TemplateTask, on_delete=models.CASCADE)
-    tag = models.ForeignKey(Tag, on_delete=models.CASCADE)
+    template_task = models.ForeignKey(
+        TemplateTask,
+        on_delete=models.CASCADE
+    )
+    tag = models.ForeignKey(
+        Tag,
+        on_delete=models.CASCADE
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template_task", "tag"],
+                name="unique_template_task_tag",
+            )
+        ]
 
     def __str__(self):
         return f"{self.template_task} - {self.tag}"
 
-
 # This association model allows one activity to have multiple tags.
 class TemplateActivityTag(models.Model):
     template_activity_tag_id = models.AutoField(primary_key=True)
-    template_activity = models.ForeignKey(TemplateActivity, on_delete=models.CASCADE)
-    tag = models.ForeignKey(Tag, on_delete=models.CASCADE)
+    template_activity = models.ForeignKey(
+        TemplateActivity,
+        on_delete=models.CASCADE
+    )
+    tag = models.ForeignKey(
+        Tag,
+        on_delete=models.CASCADE
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["template_activity", "tag"],
+                name="unique_template_activity_tag",
+            )
+        ]
 
     def __str__(self):
         return f"{self.template_activity} - {self.tag}"

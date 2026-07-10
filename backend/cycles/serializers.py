@@ -17,7 +17,7 @@ class CycleInstanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleInstance
         fields = "__all__"
-        read_only_fields = ["cycle_id", "user", "created_at"]
+        read_only_fields = ["cycle_id", "user", "status", "created_at"]
 
 
 class CycleTaskSerializer(serializers.ModelSerializer):
@@ -39,12 +39,36 @@ class CycleTaskSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         cycle = attrs.get("cycle") or getattr(self.instance, "cycle", None)
-        template_task = attrs.get("template_task") or getattr(self.instance, "template_task", None)
+        template_task = attrs.get("template_task") or getattr(
+            self.instance,
+            "template_task",
+            None,
+        )
+
         if cycle and template_task and cycle.template_id != template_task.template_id:
             raise serializers.ValidationError(
                 {"template_task": ["The template task must belong to the cycle template."]}
             )
+
         return attrs
+
+    def update(self, instance, validated_data):
+        protected_fields = [
+            "cycle",
+            "template_task",
+            "task_name",
+            "calculated_start_date",
+            "calculated_end_date",
+            "is_mandatory",
+            "is_fixed_date",
+            "reminder_lead_days",
+            "note_text",
+        ]
+
+        for field in protected_fields:
+            validated_data.pop(field, None)
+
+        return super().update(instance, validated_data)
 
     class Meta:
         model = CycleTask
@@ -76,7 +100,12 @@ class CycleActivitySerializer(serializers.ModelSerializer):
             "template_activity",
             None,
         )
-        if cycle and template_activity and cycle.template_id != template_activity.template_id:
+
+        if (
+            cycle
+            and template_activity
+            and cycle.template_id != template_activity.template_id
+        ):
             raise serializers.ValidationError(
                 {
                     "template_activity": [
@@ -84,7 +113,21 @@ class CycleActivitySerializer(serializers.ModelSerializer):
                     ]
                 }
             )
+
         return attrs
+
+    def update(self, instance, validated_data):
+        protected_fields = [
+            "cycle",
+            "template_activity",
+            "activity_name",
+            "note_text",
+        ]
+
+        for field in protected_fields:
+            validated_data.pop(field, None)
+
+        return super().update(instance, validated_data)
 
     class Meta:
         model = CycleActivity
