@@ -75,6 +75,13 @@ class TemplateTask(models.Model):
         on_delete=models.CASCADE,
         related_name="template_tasks"
     )
+    template_activity = models.ForeignKey(
+        "TemplateActivity",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="template_tasks",
+    )
 
     task_name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)

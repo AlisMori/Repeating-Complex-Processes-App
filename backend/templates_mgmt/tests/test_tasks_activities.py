@@ -278,3 +278,87 @@ class TaskActivityManagementTests(APITestCase):
         returned_names = {row["task_name"] for row in response.data}
         self.assertNotIn("Should not be visible", returned_names)
 
+    def test_create_template_task_with_activity_link(self):
+        activity = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Activity Container",
+            start_offset_days=1,
+            end_offset_days=5,
+        )
+
+        url = reverse("template-tasks-list")
+
+        response = self.client.post(
+            url,
+            {
+                "template": self.template.template_id,
+                "template_activity": activity.template_activity_id,
+                "task_name": "Linked Task",
+                "description": "Task linked to activity",
+                "day_offset": 2,
+                "duration_days": 2,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        task = TemplateTask.objects.get(task_name="Linked Task")
+        self.assertEqual(task.template_activity, activity)
+
+    def test_task_outside_activity_range_expands_activity(self):
+        activity = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Expandable Activity",
+            start_offset_days=3,
+            end_offset_days=5,
+        )
+
+        task = TemplateTask.objects.create(
+            template=self.template,
+            template_activity=activity,
+            task_name="Edge Task",
+            day_offset=3,
+            duration_days=1,
+        )
+
+        url = reverse("template-tasks-detail", args=[task.template_task_id])
+
+        response = self.client.patch(
+            url,
+            {
+                "day_offset": 1,
+                "duration_days": 6,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        activity.refresh_from_db()
+        self.assertEqual(activity.start_offset_days, 1)
+        self.assertEqual(activity.end_offset_days, 7)
+
+    def test_delete_activity_deletes_linked_tasks(self):
+        activity = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Activity With Tasks",
+            start_offset_days=1,
+            end_offset_days=5,
+        )
+
+        TemplateTask.objects.create(
+            template=self.template,
+            template_activity=activity,
+            task_name="Linked Task",
+            day_offset=2,
+            duration_days=1,
+        )
+
+        url = reverse("template-activities-detail", args=[activity.template_activity_id])
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(TemplateActivity.objects.filter(pk=activity.pk).exists())
+        self.assertFalse(TemplateTask.objects.filter(task_name="Linked Task").exists())
