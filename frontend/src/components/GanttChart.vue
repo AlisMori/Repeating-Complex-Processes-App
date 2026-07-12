@@ -24,7 +24,7 @@
    ============================================ -->
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   // [{ name, start, end, isMandatory, isFixed, depName }]
@@ -44,6 +44,14 @@ const TASK_ROW_HEIGHT = 46 // extra room for an optional dependency line
 
 const safeMaxDay = computed(() => Math.max(props.maxDay, 1))
 const totalWidth = computed(() => safeMaxDay.value * props.pxPerDay)
+
+const hoveredBar = ref(null)
+
+function highlightStyle(bar) {
+  const left = bar.start * props.pxPerDay
+  const width = Math.max((bar.end - bar.start) * props.pxPerDay, 14)
+  return { left: `${left}px`, width: `${width}px` }
+}
 
 // Pick a "nice" day interval for the labeled major ticks so a
 // 5-day template shows every day, and a 100-day template shows
@@ -70,6 +78,12 @@ function positionBar(bar) {
   const left = bar.start * props.pxPerDay
   const width = Math.max((bar.end - bar.start) * props.pxPerDay, 14)
   return { left: `${left}px`, width: `${width}px` }
+}
+
+function tooltipStyle(bar) {
+  const left = bar.start * props.pxPerDay
+  const width = Math.max((bar.end - bar.start) * props.pxPerDay, 14)
+  return { left: `${left + width / 2}px` }
 }
 
 const chartStyle = computed(() => ({
@@ -109,6 +123,12 @@ const chartStyle = computed(() => ({
 
       <!-- CONTENT: ticks + bars, top to bottom, same row heights as the sidebar -->
       <div class="gantt-content gantt-grid">
+	<!-- HOVER SPOTLIGHT: full-height band across the hovered bar's day range -->
+	<div
+          v-if="hoveredBar"
+  	  class="gantt-hover-highlight"
+  	  :style="highlightStyle(hoveredBar)"
+	></div>
         <div class="gantt-tick-row" :style="{ height: ROW_HEIGHT + 'px' }">
           <div v-for="tick in ticks" :key="tick" class="gantt-tick" :style="{ left: (tick * pxPerDay) + 'px' }">
             <span>{{ tick }}</span>
@@ -122,11 +142,15 @@ const chartStyle = computed(() => ({
           class="gantt-content-cell"
           :style="{ height: ACTIVITY_ROW_HEIGHT + 'px' }"
         >
-          <div
+        <div
             class="gantt-bar gantt-bar-activity"
             :style="positionBar(bar)"
-            :title="`${bar.name} — Day ${bar.start} to Day ${bar.end}`"
+            @mouseenter="hoveredBar = bar"
+            @mouseleave="hoveredBar = null"
           ></div>
+          <div v-if="hoveredBar === bar" class="gantt-bar-tooltip" :style="tooltipStyle(bar)">
+            {{ bar.end - bar.start }} day{{ (bar.end - bar.start) !== 1 ? 's' : '' }}
+          </div>
         </div>
 
         <div v-if="taskBars.length > 0" class="gantt-content-cell" :style="{ height: ROW_HEIGHT + 'px' }"></div>
@@ -144,7 +168,8 @@ const chartStyle = computed(() => ({
               'gantt-bar-task': !bar.isMandatory && !bar.isFixed
             }"
             :style="positionBar(bar)"
-            :title="`${bar.name} — Day ${bar.start} to Day ${bar.end}`"
+            @mouseenter="hoveredBar = bar"
+            @mouseleave="hoveredBar = null"
           ></div>
           <div v-if="bar.depName" class="gantt-dep-row" :style="{ left: (bar.start * pxPerDay) + 'px' }">
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -247,6 +272,46 @@ const chartStyle = computed(() => ({
   border-bottom: 1px solid rgba(15, 23, 42, 0.03);
 }
 
+.gantt-hover-highlight {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(124, 58, 237, 0.07);
+  border-left: 1px dashed rgba(124, 58, 237, 0.45);
+  border-right: 1px dashed rgba(124, 58, 237, 0.45);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.gantt-bar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-hint);
+  font-weight: 600;
+  color: var(--white);
+  background: #1E293B;
+  border-radius: 5px;
+  padding: 3px 9px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+
+.gantt-bar-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #1E293B;
+}
+
 .gantt-tick-row { position: relative; }
 .gantt-tick { position: absolute; top: 2px; display: flex; flex-direction: column; align-items: center; }
 .gantt-tick span { font-size: var(--font-hint); color: var(--text-muted); white-space: nowrap; }
@@ -255,6 +320,7 @@ const chartStyle = computed(() => ({
   position: absolute;
   top: 3px;
   height: 30px;
+  z-index: 2;
   border-radius: var(--radius-sm);
   box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }

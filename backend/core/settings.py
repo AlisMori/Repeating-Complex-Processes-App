@@ -63,7 +63,6 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django.contrib.postgres',
     'rest_framework',
     'django_q',
     'accounts',

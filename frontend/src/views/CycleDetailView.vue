@@ -10,6 +10,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { useToastStore } from '@/stores/toast'
 import { getCycle, getCycleTasks, getCycleActivities } from '@/api/cycles'
+import { getTemplateTaskDetail } from '@/api/templates'
 import api from '@/api/axios'
 
 const route = useRoute()
@@ -21,6 +22,7 @@ const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
 const delayModal = ref({ open: false, taskId: null, days: '' })
 const delayLoading = ref(false)
+const taskDetailModal = ref({ open: false, task: null, templateDetail: null, loading: false })
 
 const cycle = ref(null)
 const tasks = ref([])
@@ -53,23 +55,52 @@ function isOverdue(task) {
   return end && end < today && task.status !== 'completed' && task.status !== 'skipped'
 }
 
+function availableStatusOptions(task) {
+  if (isOverdue(task)) {
+    return [
+      { value: task.status, label: statusLabel(task.status) },
+      { value: 'skipped', label: 'Skipped' },
+      { value: 'completed', label: 'Completed' },
+    ]
+  }
+  if (task.status === 'pending') {
+    return [
+      { value: 'pending', label: 'Pending' },
+      { value: 'in_progress', label: 'In Progress' },
+      { value: 'skipped', label: 'Skipped' },
+    ]
+  }
+  if (task.status === 'in_progress') {
+    return [
+      { value: 'in_progress', label: 'In Progress' },
+      { value: 'completed', label: 'Completed' },
+      { value: 'skipped', label: 'Skipped' },
+    ]
+  }
+  return [{ value: task.status, label: statusLabel(task.status) }]
+}
+
 function isDueToday(task) {
-  return isToday(task.calculated_start_date) && task.status !== 'completed'
+  return isToday(task.calculated_start_date) && task.status !== 'completed' && task.status !== 'skipped'
 }
 
 function isUpcoming(task) {
   const start = parseDate(task.calculated_start_date)
-  return start && start > today && task.status !== 'completed'
+  return start && start > today && task.status !== 'completed' && task.status !== 'skipped'
 }
 
 const overdueTasks = computed(() => tasks.value.filter(isOverdue))
 const todayTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && isDueToday(t)))
 const upcomingTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && !isDueToday(t) && isUpcoming(t)))
 const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed'))
+const skippedTasks = computed(() => tasks.value.filter(t => t.status === 'skipped'))
 
 const progress = computed(() => {
   if (tasks.value.length === 0) return 0
-  return Math.round((completedTasks.value.length / tasks.value.length) * 100)
+  // A cycle is considered done once every mandatory task is completed
+  // OR skipped (per the backend's auto-completion rule), so both
+  // count toward progress here.
+  return Math.round(((completedTasks.value.length + skippedTasks.value.length) / tasks.value.length) * 100)
 })
 
 const endDate = computed(() => {
@@ -152,14 +183,38 @@ async function confirmShutdownCycle() {
 function statusClass(status) {
   if (status === 'completed') return 'status-completed'
   if (status === 'in_progress') return 'status-in-progress'
-  if (status === 'delayed') return 'status-delayed'
+  if (status === 'skipped') return 'status-skipped'
   if (status === 'overdue') return 'status-overdue'
   return 'status-pending'
 }
 
 function statusLabel(status) {
-  const map = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', overdue: 'Overdue', delayed: 'Delayed' }
+  const map = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', overdue: 'Overdue', skipped: 'Skipped' }
   return map[status] || status
+}
+
+async function openTaskDetail(task) {
+  taskDetailModal.value = { open: true, task, templateDetail: null, loading: true }
+  try {
+    const { data } = await getTemplateTaskDetail(task.template_task)
+    taskDetailModal.value.templateDetail = data
+  } catch {
+    // If this fails (e.g. the template task was since deleted), the
+    // modal still shows everything available directly on the
+    // CycleTask itself — just without the original description.
+  } finally {
+    taskDetailModal.value.loading = false
+  }
+}
+
+function formatTaskReminders(val) {
+  if (!val || (Array.isArray(val) && val.length === 0)) return 'None'
+  const list = Array.isArray(val) ? val : [val]
+  return list
+    .slice()
+    .sort((a, b) => b - a)
+    .map(d => d === 0 ? 'On the day' : `${d} day${d !== 1 ? 's' : ''} before`)
+    .join(', ')
 }
 
 onMounted(loadCycle)
@@ -236,19 +291,23 @@ onMounted(loadCycle)
 
             <div v-if="overdueTasks.length > 0">
               <div class="timeline-label danger">⚠ Overdue</div>
-              <div v-for="task in overdueTasks" :key="task.cycle_task_id" class="task-card overdue-card">
+              <div v-for="task in overdueTasks" :key="task.cycle_task_id" class="task-card overdue-card" @click="openTaskDetail(task)">
                 <div class="tc-row">
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span></div>
                     <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
                     <div v-if="task.note_text" class="tc-note">{{ task.note_text }}</div>
                   </div>
-                  <div class="tc-right">
+<div class="tc-right" @click.stop>
                     <span class="tc-status status-overdue">Overdue</span>
-                    <div class="tc-actions">
-                      <button class="action-btn action-complete" @click="updateTaskStatus(task.cycle_task_id, 'completed')">Mark complete</button>
-                      <button class="action-btn action-delay" @click="openDelayModal(task.cycle_task_id)">Record delay</button>
-                    </div>
+                    <BaseSelect
+                      class="status-select"
+                      :model-value="task.status"
+                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
+                    >
+                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </BaseSelect>
+                    <button class="action-btn action-delay" @click.stop="openDelayModal(task.cycle_task_id)">Record delay</button>
                   </div>
                 </div>
               </div>
@@ -256,23 +315,20 @@ onMounted(loadCycle)
 
             <div v-if="todayTasks.length > 0">
               <div class="timeline-label">Today</div>
-              <div v-for="task in todayTasks" :key="task.cycle_task_id" class="task-card">
+              <div v-for="task in todayTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
                 <div class="tc-row">
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
                     <div class="tc-dates">Due {{ formatDate(task.calculated_start_date) }}</div>
                   </div>
-                  <div class="tc-right">
+		  <div class="tc-right" @click.stop>
                     <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
                     <BaseSelect
                       class="status-select"
                       :model-value="task.status"
                       @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
                     >
-                      <option value="pending">Pending</option>
-                      <option value="in_progress">In Progress</option>
-                      <option value="completed">Completed</option>
-                      <option value="delayed">Delayed</option>
+                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </BaseSelect>
                   </div>
                 </div>
@@ -281,15 +337,21 @@ onMounted(loadCycle)
 
             <div v-if="upcomingTasks.length > 0">
               <div class="timeline-label">Upcoming</div>
-              <div v-for="task in upcomingTasks" :key="task.cycle_task_id" class="task-card">
+              <div v-for="task in upcomingTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
                 <div class="tc-row">
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
                     <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
                   </div>
-                  <div class="tc-right">
-                    <span class="tc-status status-pending">Pending</span>
-                    <button class="action-btn action-complete" @click="updateTaskStatus(task.cycle_task_id, 'completed')">Mark complete</button>
+		  <div class="tc-right" @click.stop>
+                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <BaseSelect
+                      class="status-select"
+                      :model-value="task.status"
+                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
+                    >
+                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </BaseSelect>
                   </div>
                 </div>
               </div>
@@ -297,7 +359,7 @@ onMounted(loadCycle)
 
             <div v-if="completedTasks.length > 0">
               <div class="timeline-label">Completed</div>
-              <div v-for="task in completedTasks" :key="task.cycle_task_id" class="task-card completed-card">
+              <div v-for="task in completedTasks" :key="task.cycle_task_id" class="task-card completed-card" @click="openTaskDetail(task)">
                 <div class="tc-row">
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}</div>
@@ -305,12 +367,28 @@ onMounted(loadCycle)
                   </div>
                   <div class="tc-right">
                     <span class="tc-status status-completed">Completed</span>
-                    <button class="action-btn action-undo" @click="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
+                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
                   </div>
                 </div>
               </div>
             </div>
 
+            <div v-if="skippedTasks.length > 0">
+              <div class="timeline-label">Skipped</div>
+              <div v-for="task in skippedTasks" :key="task.cycle_task_id" class="task-card skipped-card" @click="openTaskDetail(task)">
+                <div class="tc-row">
+                  <div class="tc-left">
+                    <div class="tc-name">{{ task.task_name }}</div>
+                    <div class="tc-dates">{{ formatDate(task.calculated_start_date) }}</div>
+                  </div>
+                  <div class="tc-right">
+                    <span class="tc-status status-skipped">Skipped</span>
+                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          
             <div v-if="tasks.length === 0 && activities.length === 0" class="empty-section">No tasks or activities in this cycle yet.</div>
           </div>
 
@@ -320,7 +398,7 @@ onMounted(loadCycle)
               <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ tasks.filter(t => t.status === 'in_progress').length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#F59E0B;"></div><span class="legend-label">Delayed</span><span class="legend-count">{{ tasks.filter(t => t.status === 'delayed').length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:#F59E0B;"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--border);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ tasks.filter(t => t.status === 'pending').length }}</span></div>
             </div>
             <div class="side-card">
@@ -361,6 +439,52 @@ onMounted(loadCycle)
         placeholder="e.g. 3"
         hint="Downstream dependent tasks will be recalculated automatically."
       />
+    </BaseModal>
+
+    <!-- TASK DETAIL MODAL -->
+    <BaseModal
+      v-model="taskDetailModal.open"
+      :title="taskDetailModal.task?.task_name || 'Task details'"
+    >
+      <div v-if="taskDetailModal.task" class="task-detail">
+        <div class="task-detail-row">
+          <span class="task-detail-label">Status</span>
+          <span class="tc-status" :class="statusClass(taskDetailModal.task.status)">{{ statusLabel(taskDetailModal.task.status) }}</span>
+        </div>
+        <div class="task-detail-row">
+          <span class="task-detail-label">Dates</span>
+          <span class="task-detail-value">{{ formatDate(taskDetailModal.task.calculated_start_date) }} → {{ formatDate(taskDetailModal.task.calculated_end_date) }}</span>
+        </div>
+        <div class="task-detail-row">
+          <span class="task-detail-label">Mandatory</span>
+          <span class="task-detail-value">{{ taskDetailModal.task.is_mandatory ? 'Yes' : 'No' }}</span>
+        </div>
+        <div class="task-detail-row">
+          <span class="task-detail-label">Fixed date</span>
+          <span class="task-detail-value">{{ taskDetailModal.task.is_fixed_date ? 'Yes' : 'No' }}</span>
+        </div>
+        <div class="task-detail-row">
+          <span class="task-detail-label">Reminders</span>
+          <span class="task-detail-value">{{ formatTaskReminders(taskDetailModal.task.reminder_lead_days) }}</span>
+        </div>
+
+        <div v-if="taskDetailModal.task.note_text" class="task-detail-block">
+          <div class="task-detail-block-label">Note</div>
+          <p class="task-detail-block-text">{{ taskDetailModal.task.note_text }}</p>
+        </div>
+
+        <!-- From the original template — loaded separately since a
+             running task doesn't carry its own copy of the description. -->
+        <div v-if="taskDetailModal.loading" class="task-detail-loading">Loading template details...</div>
+        <div v-else-if="taskDetailModal.templateDetail?.description" class="task-detail-block">
+          <div class="task-detail-block-label">Description (from template)</div>
+          <p class="task-detail-block-text">{{ taskDetailModal.templateDetail.description }}</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <BaseButton variant="secondary" @click="taskDetailModal.open = false">Close</BaseButton>
+      </template>
     </BaseModal>
 
   </AppLayout>
@@ -416,9 +540,12 @@ onMounted(loadCycle)
 .timeline-label.violet { color: var(--violet); }
 
 /* ── TASK CARDS ── */
-.task-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; }
+.task-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; cursor: pointer; transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
+.task-card:hover { border-color: #C4B5FD; box-shadow: var(--shadow-sm); }
 .task-card.overdue-card { border-color: #FECACA; background: #FFF8F8; }
+.task-card.overdue-card:hover { border-color: #FCA5A5; }
 .task-card.completed-card { opacity: 0.65; }
+.task-card.skipped-card { opacity: 0.65; }
 .tc-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .tc-left { flex: 1; min-width: 0; }
 .tc-name { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); margin-bottom: 3px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -433,19 +560,43 @@ onMounted(loadCycle)
 .status-completed { background: var(--success-bg); color: #15803D; }
 .status-in-progress { background: var(--warning-bg); color: #92400E; }
 .status-overdue { background: var(--danger-bg); color: #B91C1C; }
-.status-delayed { background: #FEF3C7; color: #92400E; }
+.status-skipped { background: #FEF3C7; color: #92400E; }
 .status-pending { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 .status-activity { background: var(--violet-bg); color: var(--violet); }
 
-/* ── ACTIONS ── */
+/* ── ACTIONS ──
+   Buttons that change state get a visible border, a subtle lift and
+   shadow on hover, and a brightness shift — clear, consistent
+   feedback that these are interactive, not just colored labels. */
 .tc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.action-btn { font-size: var(--font-label); font-weight: 500; padding: 4px 10px; border: none; border-radius: 5px; cursor: pointer; font-family: var(--font-main); }
-.action-complete { background: var(--success-bg); color: #15803D; }
-.action-delay { background: #FEF3C7; color: #92400E; }
+.action-btn {
+  font-size: var(--font-label);
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-main);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.action-btn:hover { transform: translateY(-1px); filter: brightness(0.95); box-shadow: 0 2px 6px rgba(0,0,0,0.15); }
+.action-btn:active { transform: translateY(0); box-shadow: none; }
+.action-complete { background: var(--success-bg); color: #15803D; border: 1px solid #BBF7D0; }
+.action-delay { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
 .action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 /* Compact sizing for the inline status dropdown on task rows */
 .status-select :deep(.base-select) { height: 34px; padding: 0 26px 0 10px; background: var(--white); }
 .status-select :deep(.select-chevron) { right: 8px; width: 13px; height: 13px; }
+
+/* ── TASK DETAIL MODAL ── */
+.task-detail { display: flex; flex-direction: column; gap: 10px; }
+.task-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }
+.task-detail-row:last-of-type { border-bottom: none; }
+.task-detail-label { font-size: var(--font-label); color: var(--text-secondary); }
+.task-detail-value { font-size: var(--font-label); font-weight: 500; color: var(--text-primary); }
+.task-detail-block { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-light); }
+.task-detail-block-label { font-size: var(--font-hint); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.task-detail-block-text { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.55; margin: 0; }
+.task-detail-loading { font-size: var(--font-label); color: var(--text-muted); padding-top: 8px; }
 
 /* ── ACTIVITY CARD ── */
 .activity-card { background: var(--violet-bg); border: 1px solid #DDD6FE; border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; }

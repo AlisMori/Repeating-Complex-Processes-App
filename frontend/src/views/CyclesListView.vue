@@ -19,7 +19,7 @@ const toast = useToastStore()
 const cycles = ref([])
 const loading = ref(true)
 const error = ref('')
-const activeFilter = ref('all')
+const activeFilter = ref('running')
 const shutdownModal = ref({ open: false, cycleId: null })
 const shutdownLoading = ref(false)
 
@@ -94,8 +94,6 @@ onMounted(async () => {
   <AppLayout>
     <template #topbar>
       <span class="topbar-title">Cycles</span>
-      <div style="margin-left: auto; display: flex; gap: 10px;">
-        <button type="button" class="page-help-btn" title="Show tips" @click="onboardingStore.startTour('cycles')">
       <div class="topbar-actions">
         <SmartSearch
           context="cycles"
@@ -198,6 +196,7 @@ onMounted(async () => {
 
 <style scoped>
 .topbar-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
 .page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
@@ -235,6 +234,34 @@ onMounted(async () => {
 .cc-bottom { display: flex; align-items: center; justify-content: space-between; }
 .cc-dates { font-size: var(--font-hint); color: var(--text-muted); }
 
-.cc-open-btn { font-size: var(--font-label); font-weight: 500; color: var(--violet); background: var(--violet-bg); border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-family: var(--font-main); }
-.cc-shutdown-btn { font-size: var(--font-label); font-weight: 500; color: var(--danger); background: var(--danger-bg); border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-family: var(--font-main); }
+.cc-open-btn {
+  font-size: var(--font-label);
+  font-weight: 600;
+  color: var(--white);
+  background: var(--violet);
+  border: none;
+  border-radius: 6px;
+  padding: 7px 16px;
+  cursor: pointer;
+  font-family: var(--font-main);
+  box-shadow: 0 1px 2px rgba(124,58,237,0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.cc-open-btn:hover { background: var(--violet-dark); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(124,58,237,0.35); }
+.cc-open-btn:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(124,58,237,0.3); }
+
+.cc-shutdown-btn {
+  font-size: var(--font-label);
+  font-weight: 600;
+  color: var(--danger);
+  background: var(--white);
+  border: 1.5px solid var(--danger);
+  border-radius: 6px;
+  padding: 6px 15px;
+  cursor: pointer;
+  font-family: var(--font-main);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.cc-shutdown-btn:hover { background: var(--danger-bg); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(239,68,68,0.25); }
+.cc-shutdown-btn:active { transform: translateY(0); box-shadow: none; }
 </style>
