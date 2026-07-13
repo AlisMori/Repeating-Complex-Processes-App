@@ -17,12 +17,14 @@ from core.permissions import (
 )
 
 from templates_mgmt.models import Template, TemplateTask
+from templates_mgmt.services import fork_new_version, new_version_payload
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .services import generate_cycle_runtime_records, validate_activity_bounds
 from .dependency_engine import (
     DependencyConflict,
     apply_task_shift,
     collect_dependency_violations,
+    get_allowed_dependency_targets,
     preview_task_shift,
 )
 
@@ -226,7 +228,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
             if str(task.cycle_task_id) not in resolutions_by_id
         ]
         if still_unresolved:
-            raise PrerequisitesUnresolved(unresolved)
+            raise PrerequisitesUnresolved(still_unresolved)
 
         from rest_framework.exceptions import ValidationError
 
@@ -487,24 +489,82 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
             depends_on_task__template_id__in=accessible_template_ids,
         ).distinct()
 
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         task = serializer.validated_data["task"]
         depends_on_task = serializer.validated_data["depends_on_task"]
         self._validate_editable_dependency_tasks(task, depends_on_task)
         self._reject_if_invalid(task, depends_on_task)
-        serializer.save()
 
-    def perform_update(self, serializer):
-        task = serializer.validated_data.get("task", serializer.instance.task)
-        depends_on_task = serializer.validated_data.get(
-            "depends_on_task",
-            serializer.instance.depends_on_task,
+        with transaction.atomic():
+            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            new_edge = TaskDependency.objects.create(
+                task=task_id_map[task.template_task_id],
+                depends_on_task=task_id_map[depends_on_task.template_task_id],
+            )
+
+        response_data = TaskDependencySerializer(
+            new_edge, context=self.get_serializer_context()
+        ).data
+        response_data["new_template_version"] = new_version_payload(new_template)
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        task = instance.task
+        old_depends_on = instance.depends_on_task
+
+        serializer = self.get_serializer(
+            instance, data=request.data, partial=kwargs.get("partial", False)
         )
+        serializer.is_valid(raise_exception=True)
+
+        new_task = serializer.validated_data.get("task", task)
+        new_depends_on = serializer.validated_data.get("depends_on_task", old_depends_on)
+        self._validate_editable_dependency_tasks(new_task, new_depends_on)
+        self._reject_if_invalid(new_task, new_depends_on, exclude_dependency_id=instance.pk)
+
+        with transaction.atomic():
+            # The fork happens against the edge's own (pre-edit) template,
+            # copying it also copies this edge exactly as it was, then the
+            # requested change is applied to that copy.
+            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            copied_edge = TaskDependency.objects.get(
+                task=task_id_map[task.template_task_id],
+                depends_on_task=task_id_map[old_depends_on.template_task_id],
+            )
+            copied_edge.task = task_id_map[new_task.template_task_id]
+            copied_edge.depends_on_task = task_id_map[new_depends_on.template_task_id]
+            copied_edge.save()
+
+        response_data = TaskDependencySerializer(
+            copied_edge, context=self.get_serializer_context()
+        ).data
+        response_data["new_template_version"] = new_version_payload(new_template)
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        task = instance.task
+        depends_on_task = instance.depends_on_task
         self._validate_editable_dependency_tasks(task, depends_on_task)
-        self._reject_if_invalid(
-            task, depends_on_task, exclude_dependency_id=serializer.instance.pk
+
+        with transaction.atomic():
+            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            TaskDependency.objects.filter(
+                task=task_id_map[task.template_task_id],
+                depends_on_task=task_id_map[depends_on_task.template_task_id],
+            ).delete()
+
+        return Response(
+            {
+                "message": "Dependency removed, a new template version was created.",
+                "new_template_version": new_version_payload(new_template),
+            },
+            status=status.HTTP_200_OK,
         )
-        serializer.save()
 
     def _validate_editable_dependency_tasks(self, task, depends_on_task):
         if task.template_id != depends_on_task.template_id:
@@ -535,7 +595,7 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         # picks it, showing every problem with that specific pair right
         # away, instead of only finding out something was wrong after
         # the user has already gone through every step and submitted.
-        # Same checks perform_create/perform_update run.
+        # Same checks create/update run.
         task_id = request.data.get("task")
         depends_on_task_id = request.data.get("depends_on_task")
 
@@ -577,3 +637,41 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         )
 
         return Response({"valid": not violations, "issues": violations}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"])
+    def allowed_targets(self, request):
+        # Every task in the same template that ?task=<id> could validly
+        # depend on, for populating a "depends on" dropdown without
+        # offering choices the backend would reject outright for
+        # creating a circular chain. Offset conflicts and the fan-out
+        # cap can still change before submission, those get the full,
+        # current picture from /validate/ once a specific candidate is
+        # picked, not from this list.
+        task_id = request.query_params.get("task")
+        if not task_id:
+            return Response(
+                {"task": ["This query parameter is required."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            task = TemplateTask.objects.select_related("template").get(pk=task_id)
+        except TemplateTask.DoesNotExist:
+            return Response({"task": ["Task not found."]}, status=status.HTTP_404_NOT_FOUND)
+
+        if not user_can_edit_template(request.user, task.template):
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("You do not have permission to view this template.")
+
+        candidates = get_allowed_dependency_targets(task)
+        return Response(
+            {
+                "task": task.pk,
+                "allowed_targets": [
+                    {"template_task_id": candidate.pk, "task_name": candidate.task_name}
+                    for candidate in candidates
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )

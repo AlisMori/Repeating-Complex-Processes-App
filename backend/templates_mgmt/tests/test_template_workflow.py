@@ -20,6 +20,11 @@ class TemplateWorkflowTests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_full_template_management_workflow(self):
+        # Each task/activity create forks a new template version, a real
+        # client has to follow the current version forward at each step
+        # rather than reusing the id it started with, this test does the
+        # same: current_template_id always points at whatever version the
+        # previous step actually landed on.
         create_response = self.client.post(
             "/api/templates/",
             {
@@ -33,12 +38,12 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-        template_id = create_response.data["template_id"]
+        current_template_id = create_response.data["template_id"]
 
         task_response = self.client.post(
             "/api/template-tasks/",
             {
-                "template": template_id,
+                "template": current_template_id,
                 "task_name": "Workflow Task",
                 "description": "Task in workflow",
                 "day_offset": 1,
@@ -48,11 +53,12 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(task_response.status_code, status.HTTP_201_CREATED)
+        current_template_id = task_response.data["new_template_version"]["template_id"]
 
         activity_response = self.client.post(
             "/api/template-activities/",
             {
-                "template": template_id,
+                "template": current_template_id,
                 "activity_name": "Workflow Activity",
                 "description": "Activity in workflow",
                 "start_offset_days": 1,
@@ -62,9 +68,12 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(activity_response.status_code, status.HTTP_201_CREATED)
+        current_template_id = activity_response.data["new_template_version"]["template_id"]
 
+        # By now current_template_id has both the task and the activity,
+        # duplicating it should carry both across.
         duplicate_response = self.client.post(
-            f"/api/templates/{template_id}/duplicate/",
+            f"/api/templates/{current_template_id}/duplicate/",
             format="json",
         )
 
@@ -79,7 +88,7 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         update_response = self.client.put(
-            f"/api/templates/{template_id}/",
+            f"/api/templates/{current_template_id}/",
             {
                 "template_name": "Workflow Template Version 2",
                 "description": "Updated workflow template",
@@ -91,16 +100,19 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        current_template_id = update_response.data["template"]["template_id"]
 
         versions_response = self.client.get(
-            f"/api/templates/{template_id}/versions/"
+            f"/api/templates/{current_template_id}/versions/"
         )
 
         self.assertEqual(versions_response.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(versions_response.data), 2)
+        # Original -> task fork -> activity fork -> this update's fork,
+        # at least 4 versions in the lineage by now.
+        self.assertGreaterEqual(len(versions_response.data), 4)
 
         share_response = self.client.post(
-            f"/api/templates/{template_id}/share/",
+            f"/api/templates/{current_template_id}/share/",
             {"username": self.recipient.username},
             format="json",
         )
@@ -115,4 +127,11 @@ class TemplateWorkflowTests(APITestCase):
                 template_id=shared_template_id,
                 access_type="shared",
             ).exists()
+        )
+        # The share carried the task and activity across too.
+        self.assertTrue(
+            TemplateTask.objects.filter(template_id=shared_template_id).exists()
+        )
+        self.assertTrue(
+            TemplateActivity.objects.filter(template_id=shared_template_id).exists()
         )

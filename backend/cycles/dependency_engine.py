@@ -62,6 +62,24 @@ def get_prerequisite_cycle_tasks(cycle, template_task, exclude_cycle_task_id=Non
         queryset = queryset.exclude(pk=exclude_cycle_task_id)
     return queryset
 
+def get_allowed_dependency_targets(task):
+    """Every TemplateTask in the same template that `task` could validly
+    depend on: excludes itself, and anything that would close a
+    circular chain if picked. Used to populate a "depends on" dropdown
+    in the template editor so the user is never even offered a choice
+    the backend would reject for that specific reason.
+
+    Offset conflicts and the fan-out cap are deliberately not filtered
+    out here, both depend on values that can still change before the
+    user actually submits (this task's own offset, how many other
+    dependents a candidate already has), those get checked for real by
+    /task-dependencies/validate/ once a specific candidate is picked.
+    """
+    from templates_mgmt.models import TemplateTask
+
+    candidates = TemplateTask.objects.filter(template_id=task.template_id).exclude(pk=task.pk)
+    return [candidate for candidate in candidates if not would_create_cycle(task, candidate)]
+
 
 def would_create_cycle(task, depends_on_task, visited=None):
     """True if making `task` depend on `depends_on_task` would close a loop.
