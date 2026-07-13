@@ -43,6 +43,7 @@ def template_to_intermediate(template):
             "template_name": template.template_name,
             "description": template.description or "",
             "is_public": template.is_public,
+            "category": template.category.category_name if template.category_id else "",
         },
         "activities": [
             {
@@ -94,7 +95,7 @@ def write_csv(data):
         "row_type", "local_id", "name", "description",
         "day_offset", "duration_days", "start_offset_days", "end_offset_days",
         "is_mandatory", "is_fixed_date", "reminder_lead_days", "note_text",
-        "activity_local_id", "depends_on_local_id", "is_public",
+        "activity_local_id", "depends_on_local_id", "is_public", "category",
     ]
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
@@ -104,6 +105,7 @@ def write_csv(data):
         "name": data["template"]["template_name"],
         "description": data["template"]["description"],
         "is_public": data["template"]["is_public"],
+        "category": data["template"]["category"],
     })
 
     for activity in data["activities"]:
@@ -150,11 +152,12 @@ def write_xlsx(data):
 
     template_sheet = workbook.active
     template_sheet.title = "Template"
-    template_sheet.append(["template_name", "description", "is_public"])
+    template_sheet.append(["template_name", "description", "is_public", "category"])
     template_sheet.append([
         data["template"]["template_name"],
         data["template"]["description"],
         data["template"]["is_public"],
+        data["template"]["category"],
     ])
 
     activities_sheet = workbook.create_sheet("Activities")

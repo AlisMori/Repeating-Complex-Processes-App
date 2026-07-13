@@ -37,6 +37,7 @@ from .export import (
 )
 from .models import (
     Template,
+    TemplateCategory,
     TemplateTask,
     TemplateActivity,
     Tag,
@@ -47,6 +48,7 @@ from .models import (
 
 from .serializers import (
     TemplateSerializer,
+    TemplateCategorySerializer,
     TemplateTaskSerializer,
     TemplateActivitySerializer,
     TagSerializer,
@@ -91,6 +93,21 @@ class TemplateViewSet(viewsets.ModelViewSet):
             for field in ("template_name", "description", "is_public"):
                 if field in request.data:
                     setattr(new_template, field, request.data[field])
+
+            if "category" in request.data:
+                category_value = request.data["category"]
+                if category_value in (None, "", "null"):
+                    new_template.category = None
+                else:
+                    try:
+                        new_template.category = TemplateCategory.objects.get(
+                            pk=category_value, user=request.user
+                        )
+                    except TemplateCategory.DoesNotExist:
+                        raise ValidationError(
+                            {"category": ["Category not found, or it belongs to another user."]}
+                        )
+
             new_template.save()
 
         return Response(
@@ -120,6 +137,12 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 description=original_template.description,
                 is_public=False,
                 created_by_type=original_template.created_by_type,
+                # Only carried over when the duplicating user actually
+                # owns that category — a category is per-user, so this
+                # only ever fires when duplicating your own template.
+                category=original_template.category
+                if original_template.category_id and original_template.category.user_id == request.user.id
+                else None,
             )
             UserTemplate.objects.get_or_create(
                 user=request.user,
@@ -342,6 +365,9 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 description=original_template.description,
                 is_public=False,
                 created_by_type="shared",
+                # category is deliberately NOT carried over — it's a
+                # per-user classification, and the recipient wouldn't
+                # own the original's category. They can set their own.
             )
 
             UserTemplate.objects.create(
@@ -676,6 +702,78 @@ class TagViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # The logged-in user automatically becomes the owner of the tag.
         serializer.save(user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        # A tag is never renamed in place. Every task/activity already
+        # tagged with it must keep meaning exactly what it did when
+        # tagged, so "editing" a tag creates a brand new tag with the
+        # new name instead, and leaves the original (and everything
+        # assigned to it) completely untouched. The new tag starts
+        # with zero assignments — attaching it to tasks/activities is
+        # a separate, later step, same as any newly created tag.
+        instance = self.get_object()
+        serializer = self.get_serializer(data=request.data, partial=kwargs.get("partial", False))
+        serializer.is_valid(raise_exception=True)
+        new_tag_name = serializer.validated_data.get("tag_name", instance.tag_name)
+
+        new_tag = Tag.objects.create(user=request.user, tag_name=new_tag_name)
+
+        return Response(
+            {
+                "message": (
+                    "A new tag was created with this name. The previous tag "
+                    "and everything already tagged with it are unchanged."
+                ),
+                "tag": TagSerializer(new_tag).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        assigned_tasks = TemplateTaskTag.objects.filter(tag=instance).exists()
+        assigned_activities = TemplateActivityTag.objects.filter(tag=instance).exists()
+        if assigned_tasks or assigned_activities:
+            raise ValidationError(
+                "This tag is still assigned to at least one task or activity. "
+                "Remove it from everything using it before deleting the tag."
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class TemplateCategoryViewSet(viewsets.ModelViewSet):
+    serializer_class = TemplateCategorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    filter_backends = [SearchFilter]
+    search_fields = ["category_name"]
+
+    def get_queryset(self):
+        return TemplateCategory.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        # Unlike Tag, a category IS renamed in place — a template's
+        # link to it is just a name lookup (category_name shown via
+        # TemplateSerializer), nothing needs to stay frozen against a
+        # rename the way a tag's existing task/activity assignments do.
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=kwargs.get("partial", False))
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.templates.exists():
+            raise ValidationError(
+                "This category is still assigned to at least one template "
+                "(including past versions). Move every template using it to "
+                "another category first, or rename this one instead of "
+                "deleting it."
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class TemplateTaskTagViewSet(viewsets.ModelViewSet):

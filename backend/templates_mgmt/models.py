@@ -3,6 +3,30 @@ from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
 
+
+# A template-level category ("tag" in product language), e.g.
+# "Academic", "Agriculture". Deliberately a separate model from Tag
+# above rather than reusing it — Tag assigns freely to many tasks/
+# activities with no ownership constraint on deletion; a category is
+# a single classification per template with a hard delete guard.
+# See TemplateCategoryViewSet: unlike Tag, a category IS renamed in
+# place (no "new version on edit" behaviour) because nothing else
+# ever needs to remain frozen against a category rename — a
+# template's association is just a name lookup, not a snapshot.
+class TemplateCategory(models.Model):
+    category_id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    category_name = models.CharField(max_length=50)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "category_name"], name="unique_user_category_name")
+        ]
+
+    def __str__(self):
+        return self.category_name
+
+
 # This model stores reusable process templates.
 # Template is the main blueprint that later can be used to create cycle instances.
 class Template(models.Model):
@@ -20,19 +44,31 @@ class Template(models.Model):
     template_version = models.PositiveIntegerField(default=1)
 
     parent_template = models.ForeignKey(
-    "self",
-    on_delete=models.SET_NULL,
-    null=True,
-    blank=True,
-    related_name="versions")
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="versions")
 
     is_current_version = models.BooleanField(default=True)
-    
+
     template_name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     is_public = models.BooleanField(default=False)
     created_by_type = models.CharField(max_length=20, default="user")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # Optional classification, e.g. "Academic", "Agriculture". Carried
+    # forward whenever a new version is forked/duplicated/shared (see
+    # templates_mgmt/services.py) so it survives editing the same way
+    # template_name/description do, and included in export payloads.
+    category = models.ForeignKey(
+        TemplateCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="templates",
+    )
 
     def __str__(self):
         return self.template_name
@@ -58,10 +94,22 @@ class UserTemplate(models.Model):
 
 
 # Tags are used to categorise template tasks and activities.
+# NOTE ON "EDITING" A TAG: a tag is never renamed in place. Renaming
+# creates a brand new Tag row (with the new name) and leaves the
+# original completely untouched, including every task/activity it's
+# already assigned to. This mirrors the same append-only philosophy
+# Template versioning uses elsewhere in this app: existing
+# assignments must never silently change meaning underneath a task
+# or activity that already has this tag. See TagViewSet.update().
 class Tag(models.Model):
     tag_id = models.AutoField(primary_key=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     tag_name = models.CharField(max_length=50)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "tag_name"], name="unique_user_tag_name")
+        ]
 
     def __str__(self):
         return self.tag_name
@@ -104,8 +152,6 @@ class TemplateTask(models.Model):
 
     class Meta:
         ordering = ["template_task_id"]
-
-
 
 
 # TemplateActivity stores non-actionable timeline activities inside a template.
@@ -152,6 +198,7 @@ class TemplateTaskTag(models.Model):
 
     def __str__(self):
         return f"{self.template_task} - {self.tag}"
+
 
 # This association model allows one activity to have multiple tags.
 class TemplateActivityTag(models.Model):

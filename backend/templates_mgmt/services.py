@@ -83,6 +83,7 @@ def fork_new_version(original_template, user):
         description=original_template.description,
         is_public=original_template.is_public,
         created_by_type=original_template.created_by_type,
+        category=original_template.category,
         is_current_version=True,
     )
 
