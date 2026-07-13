@@ -42,6 +42,47 @@ class TemplateTaskSerializer(serializers.ModelSerializer):
                 "You do not have permission to attach a task to this template."
             )
         return value
+    
+    def validate(self, attrs):
+        template = attrs.get("template") or getattr(self.instance, "template", None)
+        template_activity = attrs.get("template_activity") or getattr(
+            self.instance,
+            "template_activity",
+            None,
+        )
+
+        if template and template_activity and template_activity.template_id != template.template_id:
+            raise serializers.ValidationError(
+                {
+                    "template_activity": [
+                        "The selected activity must belong to the same template as the task."
+                    ]
+                }
+            )
+
+        task_start = attrs.get("day_offset", getattr(self.instance, "day_offset", None))
+        duration = attrs.get("duration_days", getattr(self.instance, "duration_days", None))
+        task_end = task_start + (duration or 0) if task_start is not None else None
+
+        if (
+            self.instance is None
+            and template_activity
+            and task_start is not None
+            and task_end is not None
+        ):
+            if (
+                task_start < template_activity.start_offset_days
+                or task_end > template_activity.end_offset_days
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "template_activity": [
+                            "Task dates must stay within the selected activity date range."
+                        ]
+                    }
+                )
+
+        return attrs
 
     class Meta:
         model = TemplateTask
