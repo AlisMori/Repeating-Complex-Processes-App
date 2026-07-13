@@ -15,6 +15,9 @@ import {
   createTemplateTask,
   createTemplateActivity,
   getTemplate, getTemplateTasks, getTemplateActivities,
+  getTags, createTag,
+  createTemplateTaskTag, createTemplateActivityTag,
+  getTemplateTaskTags, getTemplateActivityTags,
 } from '@/api/templates'
 import api from '@/api/axios'
 
@@ -40,10 +43,12 @@ async function loadExistingTemplate() {
   if (!isEditMode.value) return
   loadingInitial.value = true
   try {
-    const [tplRes, tasksRes, activitiesRes] = await Promise.all([
+    const [tplRes, tasksRes, activitiesRes, taskTagsRes, activityTagsRes] = await Promise.all([
       getTemplate(templateId.value),
       getTemplateTasks(templateId.value),
       getTemplateActivities(templateId.value),
+      getTemplateTaskTags(),
+      getTemplateActivityTags(),
     ])
     const tpl = tplRes.data
     templateForm.template_name = tpl.template_name
@@ -52,6 +57,8 @@ async function loadExistingTemplate() {
 
     const taskList = Array.isArray(tasksRes.data) ? tasksRes.data : (tasksRes.data.results || [])
     const actList = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
+    const allTaskTags = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
+    const allActivityTags = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
 
     tasks.value = taskList.map(t => ({
       task_name: t.task_name,
@@ -64,6 +71,7 @@ async function loadExistingTemplate() {
       reminder_3: Array.isArray(t.reminder_lead_days) ? t.reminder_lead_days.includes(3) : t.reminder_lead_days === 3,
       reminder_0: Array.isArray(t.reminder_lead_days) ? t.reminder_lead_days.includes(0) : t.reminder_lead_days === 0,
       note_text: t.note_text || '',
+      tagIds: allTaskTags.filter(tt => tt.template_task === t.template_task_id).map(tt => tt.tag),
     }))
 
     activities.value = actList.map(a => ({
@@ -72,6 +80,7 @@ async function loadExistingTemplate() {
       start_offset_days: a.start_offset_days || 0,
       end_offset_days: a.end_offset_days || 1,
       note_text: a.note_text || '',
+      tagIds: allActivityTags.filter(at => at.template_activity === a.template_activity_id).map(at => at.tag),
     }))
   } catch (e) {
     step1Error.value = 'Failed to load template data.'
@@ -115,7 +124,35 @@ const tasks = ref([])
 const activities = ref([])
 const step2Loading = ref(false)
 const step2Error = ref('')
+const availableTags = ref([])
+const newTagName = ref('')
+const newTagLoading = ref(false)
+const newTagError = ref('')
 
+async function loadTags() {
+  try {
+    const { data } = await getTags()
+    availableTags.value = Array.isArray(data) ? data : (data.results || [])
+  } catch {
+    // Non-critical — tag checkboxes just won't have options if this fails.
+  }
+}
+
+async function createNewTag() {
+  const name = newTagName.value.trim()
+  if (!name) return
+  newTagLoading.value = true
+  newTagError.value = ''
+  try {
+    const { data } = await createTag({ tag_name: name })
+    availableTags.value.push(data)
+    newTagName.value = ''
+  } catch (e) {
+    newTagError.value = e.response?.data?.tag_name?.[0] || 'Failed to create tag.'
+  } finally {
+    newTagLoading.value = false
+  }
+}
 function buildReminderArray(task) {
   const arr = []
   if (task.reminder_7) arr.push(7)
@@ -130,6 +167,7 @@ function addTask() {
     day_offset: tasks.value.length === 0 ? 0 : Math.max(...tasks.value.map(t => Number(t.day_offset))) + 1,
     duration_days: 1, is_mandatory: false, is_fixed_date: false,
     reminder_7: false, reminder_3: false, reminder_0: false, note_text: '',
+    tagIds: [],
   })
 }
 
@@ -141,9 +179,9 @@ function addActivity() {
     start_offset_days: 0,
     end_offset_days: activities.value.length === 0 ? 30 : Math.max(...activities.value.map(a => Number(a.end_offset_days))) + 10,
     note_text: '',
+    tagIds: [],
   })
 }
-
 function removeActivity(index) { activities.value.splice(index, 1) }
 
 async function submitStep2() {
@@ -179,10 +217,14 @@ async function submitStep2() {
       // a new template version with no tasks, so we always create fresh on new version ID.
       const res = await createTemplateTask(payload)
       taskResults.push({ ...res.data, _localName: task.task_name })
+
+      for (const tagId of task.tagIds || []) {
+        await createTemplateTaskTag({ template_task: res.data.template_task_id, tag: tagId })
+      }
     }
 
     for (const act of activities.value) {
-      await createTemplateActivity({
+      const actRes = await createTemplateActivity({
         template: createdTemplateId.value,
         activity_name: act.activity_name.trim(),
         description: act.description.trim(),
@@ -190,6 +232,10 @@ async function submitStep2() {
         end_offset_days: Number(act.end_offset_days),
         note_text: act.note_text.trim(),
       })
+
+      for (const tagId of act.tagIds || []) {
+        await createTemplateActivityTag({ template_activity: actRes.data.template_activity_id, tag: tagId })
+      }
     }
 
     savedTasks.value = taskResults
@@ -353,7 +399,10 @@ const step3Preview = computed(() => {
   return gantt
 })
 
-onMounted(loadExistingTemplate)
+onMounted(async () => {
+  await loadTags()
+  await loadExistingTemplate()
+})
 </script>
 
 <template>
@@ -402,7 +451,6 @@ onMounted(loadExistingTemplate)
         <div v-if="step === 1" class="form-card">
           <div class="form-card-header">
             <div class="form-card-title">Template details</div>
-            <div class="form-card-desc">Give your template a clear name so it's easy to find and reuse later.</div>
           </div>
           <div class="form-body">
             <div class="field">
@@ -477,9 +525,32 @@ onMounted(loadExistingTemplate)
                     <label class="check-item"><input type="checkbox" v-model="task.is_mandatory" /><span>Mandatory task</span></label>
                     <label class="check-item"><input type="checkbox" v-model="task.is_fixed_date" /><span>Fixed end date (cannot be shifted by delays)</span></label>
                   </div>
+                  <div class="tag-section">
+                    <label class="field-label">Tags</label>
+                    <div v-if="availableTags.length === 0" class="tag-empty-hint">No tags yet — create one below.</div>
+                    <div v-else class="tag-checks">
+                      <label v-for="tag in availableTags" :key="tag.tag_id" class="check-item tag-check-item">
+                        <input type="checkbox" :value="tag.tag_id" v-model="task.tagIds" />
+                        <span>{{ tag.tag_name }}</span>
+                      </label>
+                    </div>
+                    <div class="tag-create-row">
+                      <input
+                        v-model="newTagName"
+                        type="text"
+                        class="tag-create-input"
+                        placeholder="New tag name"
+                        @keyup.enter="createNewTag"
+                      />
+                      <button type="button" class="tag-create-btn" :disabled="newTagLoading" @click="createNewTag">+ Add tag</button>
+                    </div>
+                    <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
+                  </div>
                 </div>
               </div>
             </div>
+
+            <!-- ACTIVITIES -->
 
             <!-- ACTIVITIES -->
             <div class="form-card">
@@ -516,10 +587,32 @@ onMounted(loadExistingTemplate)
                         v-model="act.end_offset_days"
                         label="End day *"
                         type="number"
+                        min="0"
                         placeholder="1"
                         hint="Must be after start day"
                       />
                     </div>
+                  </div>
+                  <div class="tag-section">
+                    <label class="field-label">Tags</label>
+                    <div v-if="availableTags.length === 0" class="tag-empty-hint">No tags yet — create one below.</div>
+                    <div v-else class="tag-checks">
+                      <label v-for="tag in availableTags" :key="tag.tag_id" class="check-item tag-check-item">
+                        <input type="checkbox" :value="tag.tag_id" v-model="act.tagIds" />
+                        <span>{{ tag.tag_name }}</span>
+                      </label>
+                    </div>
+                    <div class="tag-create-row">
+                      <input
+                        v-model="newTagName"
+                        type="text"
+                        class="tag-create-input"
+                        placeholder="New tag name"
+                        @keyup.enter="createNewTag"
+                      />
+                      <button type="button" class="tag-create-btn" :disabled="newTagLoading" @click="createNewTag">+ Add tag</button>
+                    </div>
+                    <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
                   </div>
                 </div>
               </div>
@@ -658,6 +751,18 @@ onMounted(loadExistingTemplate)
 .item-grid.three-col { grid-template-columns: 1fr 1fr 1fr; }
 .item-grid.two-col { grid-template-columns: 1fr 1fr; }
 .item-checks { display: flex; gap: 20px; flex-wrap: wrap; }
+
+/* TAGS */
+.tag-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border-light); }
+.tag-empty-hint { font-size: var(--font-hint); color: var(--text-muted); }
+.tag-checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.tag-check-item { font-size: var(--font-hint); }
+.tag-create-row { display: flex; gap: 8px; margin-top: 4px; }
+.tag-create-input { flex: 1; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: var(--font-label); font-family: var(--font-main); background: #FAFAFA; color: var(--text-primary); outline: none; }
+.tag-create-input:focus { border-color: var(--violet); background: var(--white); }
+.tag-create-btn { font-size: var(--font-label); font-weight: 500; color: var(--violet); background: var(--violet-bg); border: none; border-radius: var(--radius-md); padding: 0 14px; cursor: pointer; font-family: var(--font-main); white-space: nowrap; }
+.tag-create-btn:disabled { opacity: 0.6; cursor: default; }
+.tag-create-error { font-size: var(--font-hint); color: var(--danger); }
 .check-item { display: flex; align-items: center; gap: 8px; font-size: var(--font-label); color: var(--text-secondary); cursor: pointer; }
 .check-item input { accent-color: var(--violet); width: 15px; height: 15px; cursor: pointer; }
 .empty-section { font-size: var(--font-label); color: var(--text-muted); padding: 24px 0; text-align: center; }

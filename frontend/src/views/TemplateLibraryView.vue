@@ -25,6 +25,7 @@ const templates = ref([])
 const loading = ref(false)
 const error = ref('')
 const activeCategory = ref('all')
+const showAllVersions = ref(false)
 const searchQuery = ref('')
 const shareModal = ref({ open: false, templateId: null, username: '' })
 const shareError = ref('')
@@ -44,14 +45,19 @@ async function loadTemplates() {
   loading.value = true
   error.value = ''
   try {
-    const { data } = await getTemplates(searchQuery.value)
-    // Backend returns an array or paginated { results: [] }
+    const { data } = await getTemplates(searchQuery.value, { allVersions: showAllVersions.value })
     templates.value = Array.isArray(data) ? data : (data.results || [])
   } catch {
     error.value = 'Failed to load templates. Please try again.'
   } finally {
     loading.value = false
   }
+}
+
+function setVersionFilter(showAll) {
+  if (showAllVersions.value === showAll) return
+  showAllVersions.value = showAll
+  loadTemplates()
 }
 
 async function onDuplicate(id) {
@@ -157,14 +163,12 @@ onMounted(async () => {
 
       <!-- LOADING -->
       <div v-if="loading" class="loading-msg">Loading templates...</div>
-
-      <!-- FILTER TABS -->
+	
+      <!-- FILTER -->
       <div class="filter-row">
         <div class="filter-tabs">
-          <div class="filter-tab" :class="{ active: activeCategory === 'all' }" @click="activeCategory = 'all'">All</div>
-          <div class="filter-tab" :class="{ active: activeCategory === 'Academic' }" @click="activeCategory = 'Academic'">Academic</div>
-          <div class="filter-tab" :class="{ active: activeCategory === 'Agriculture' }" @click="activeCategory = 'Agriculture'">Agriculture</div>
-          <div class="filter-tab" :class="{ active: activeCategory === 'Gardening' }" @click="activeCategory = 'Gardening'">Gardening</div>
+          <div class="filter-tab" :class="{ active: !showAllVersions }" @click="setVersionFilter(false)">Current</div>
+          <div class="filter-tab" :class="{ active: showAllVersions }" @click="setVersionFilter(true)">All</div>
         </div>
         <span class="filter-count">{{ filteredTemplates.length }} template{{ filteredTemplates.length !== 1 ? 's' : '' }}</span>
       </div>
@@ -217,7 +221,7 @@ onMounted(async () => {
           </div>
 
           <div class="tc-name">{{ tpl.template_name }}</div>
-          <div class="tc-desc">{{ tpl.description || 'No description.' }}</div>
+          <div class="tc-desc" :title="tpl.description || ''">{{ tpl.description || 'No description.' }}</div>
 
           <div class="tc-footer">
             <div>
@@ -311,7 +315,17 @@ onMounted(async () => {
 .tc-menu-btn-danger:hover svg { stroke: var(--danger); }
 
 .tc-name { font-size: var(--font-label); font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-.tc-desc { font-size: var(--font-label); color: var(--text-muted); line-height: 1.5; margin-bottom: 14px; flex: 1; }
+.tc-desc {
+  font-size: var(--font-label);
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .tc-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid var(--border-light); margin-top: auto; }
 .tc-version { font-size: var(--font-label); color: var(--text-muted); margin-bottom: 5px; }

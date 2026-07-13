@@ -5,10 +5,11 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import GanttChart from '@/components/GanttChart.vue'
 import { useToastStore } from '@/stores/toast'
-import { getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview, duplicateTemplate, deleteTemplate } from '@/api/templates'
+import { getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview, duplicateTemplate, deleteTemplate, getTemplateVersions, makeCurrentVersion } from '@/api/templates'
 import api from '@/api/axios'
 
 const route = useRoute()
@@ -26,6 +27,9 @@ const deleteModalOpen = ref(false)
 const deleteLoading = ref(false)
 
 const templateId = route.params.id
+
+const versions = ref([])
+const makeCurrentLoading = ref(false)
 
 async function loadTemplate() {
   loading.value = true
@@ -64,6 +68,24 @@ function formatReminders(val) {
     return val.map(d => d === 0 ? 'On the day' : `${d} days before`).join(', ')
   }
   return val === 0 ? 'On the day' : `${val} days before`
+}
+
+function onSwitchVersion(newId) {
+  if (String(newId) === String(templateId)) return
+  router.push({ name: 'template-detail', params: { id: newId } })
+}
+
+async function onMakeCurrent() {
+  makeCurrentLoading.value = true
+  try {
+    await makeCurrentVersion(templateId)
+    toast.success('This version is now current.')
+    await loadTemplate()
+  } catch {
+    toast.error('Failed to update the current version.')
+  } finally {
+    makeCurrentLoading.value = false
+  }
 }
 
 async function onDuplicate() {
@@ -159,6 +181,23 @@ onMounted(loadTemplate)
             <div class="meta-pills">
               <span class="meta-pill pill-version">v{{ template.template_version }}</span>
               <span v-if="template.is_current_version" class="meta-pill pill-current">Current version</span>
+              <BaseSelect
+                v-if="versions.length > 1"
+                class="version-select"
+                :model-value="templateId"
+                @update:model-value="onSwitchVersion"
+              >
+                <option v-for="v in versions" :key="v.template_id" :value="v.template_id">
+                  v{{ v.template_version }}{{ v.is_current_version ? ' (current)' : '' }}
+                </option>
+              </BaseSelect>
+              <BaseButton
+                v-if="!template.is_current_version"
+                variant="secondary"
+                size="sm"
+                :loading="makeCurrentLoading"
+                @click="onMakeCurrent"
+              >Make current</BaseButton>
             </div>
           </div>
           <div class="meta-row">
@@ -300,6 +339,8 @@ onMounted(loadTemplate)
 .template-title { font-size: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; margin-bottom: 4px; }
 .template-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; }
 .meta-pills { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.version-select { width: 150px; }
+.version-select :deep(.base-select) { height: 30px; padding: 0 26px 0 10px; font-size: var(--font-hint); }
 .meta-pill { font-size: var(--font-upper); font-weight: 500; padding: 4px 12px; border-radius: 20px; }
 .pill-version { background: var(--violet-bg); color: var(--violet); }
 .pill-current { background: var(--success-bg); color: #15803D; }

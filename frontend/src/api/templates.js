@@ -25,8 +25,11 @@ import api from './axios'
  * Get all templates accessible to the current user.
  * @param {string} [search] - optional search query
  */
-export function getTemplates(search = '') {
-  return api.get('/templates/', { params: search ? { search } : {} })
+export function getTemplates(search = '', { allVersions = false } = {}) {
+  const params = {}
+  if (search) params.search = search
+  if (allVersions) params.all_versions = 'true'
+  return api.get('/templates/', { params })
 }
 
 /**
@@ -126,6 +129,17 @@ export function createCycleFromTemplate(templateId, data) {
 export function getTemplateTasks(templateId) {
   return api.get('/template-tasks/', { params: { template: templateId } })
 }
+
+/**
+ * Mark this specific version as the current one for its template
+ * family. Other versions still exist afterward — this only changes
+ * which one is treated as current.
+ * @param {number|string} id
+ */
+export function makeCurrentVersion(id) {
+  return api.post(`/templates/${id}/make_current/`)
+}
+
 
 /**
  * Get a single template task by ID — used to show the original
@@ -237,4 +251,35 @@ export function createTag(data) {
  */
 export function deleteTag(id) {
   return api.delete(`/tags/${id}/`)
+}
+
+/**
+ * Attach an existing tag to a template task.
+ * @param {{ template_task: number, tag: number }} data
+ */
+export function createTemplateTaskTag(data) {
+  return api.post('/template-task-tags/', data)
+}
+
+/**
+ * Attach an existing tag to a template activity.
+ * @param {{ template_activity: number, tag: number }} data
+ */
+export function createTemplateActivityTag(data) {
+  return api.post('/template-activity-tags/', data)
+}
+
+/**
+ * Get all task-tag links (used to show which tags are already
+ * assigned to which tasks, e.g. when loading a template for editing).
+ */
+export function getTemplateTaskTags() {
+  return api.get('/template-task-tags/')
+}
+
+/**
+ * Get all activity-tag links.
+ */
+export function getTemplateActivityTags() {
+  return api.get('/template-activity-tags/')
 }

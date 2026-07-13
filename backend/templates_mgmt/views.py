@@ -47,9 +47,13 @@ class TemplateViewSet(viewsets.ModelViewSet):
     search_fields = ["template_name", "description"]
 
     def get_queryset(self):
-        return Template.objects.filter(
+        queryset = Template.objects.filter(
             accessible_templates_q(self.request.user)
         ).distinct()
+        if self.action == "list" and self.request.query_params.get("all_versions") != "true":
+            queryset = queryset.filter(is_current_version=True)
+
+        return queryset
 
     def perform_create(self, serializer):
         template = serializer.save(
@@ -250,7 +254,6 @@ class TemplateViewSet(viewsets.ModelViewSet):
                     created_by_type=original_template.created_by_type,
                     is_current_version=True,
                 )
-                task_id_map[task.template_task_id] = new_task
 
                 UserTemplate.objects.create(
                     user=request.user,
@@ -285,7 +288,39 @@ class TemplateViewSet(viewsets.ModelViewSet):
             TemplateSerializer(version_list, many=True).data,
             status=status.HTTP_200_OK,
         )
-    
+
+    @action(detail=True, methods=["post"])
+    def make_current(self, request, pk=None):
+        """
+        Marks this specific version as the current one for its
+        template family, un-marking whichever version was previously
+        current. Every version still exists afterward — this only
+        changes which one is treated as "current" (e.g. the one used
+        when creating a new cycle, and the one shown by default in
+        the template library).
+        """
+        target_version = self.get_object()
+
+        if not user_can_edit_template(request.user, target_version):
+            raise PermissionDenied("You do not have permission to modify this template.")
+
+        root_template = target_version.parent_template or target_version
+
+        with transaction.atomic():
+            family = Template.objects.filter(
+                parent_template=root_template
+            ) | Template.objects.filter(template_id=root_template.template_id)
+
+            family.exclude(template_id=target_version.template_id).update(is_current_version=False)
+
+            target_version.is_current_version = True
+            target_version.save(update_fields=["is_current_version"])
+
+        return Response(
+            TemplateSerializer(target_version).data,
+            status=status.HTTP_200_OK,
+        )
+
     @action(detail=True, methods=["post"])
     def share(self, request, pk=None):
         # Share a template by creating an independent deep copy for another user.
