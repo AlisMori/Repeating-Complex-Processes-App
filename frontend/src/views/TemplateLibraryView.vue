@@ -130,19 +130,6 @@ onMounted(async () => {
   <AppLayout>
     <template #topbar>
       <span class="topbar-title">Template Library</span>
-      <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
-        <div class="search-box">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Search templates..."
-            @input="loadTemplates"
-          />
-        </div>
-        <button type="button" class="page-help-btn" title="Show tips" @click="onboardingStore.startTour('templates')">
       <div class="topbar-actions">
         <SmartSearch
           context="templates"
@@ -240,7 +227,7 @@ onMounted(async () => {
                 <span v-if="tpl.is_public" class="tc-badge badge-public">Public</span>
               </div>
             </div>
-            <button class="btn-use" @click.stop="useTemplate(tpl.template_id || tpl.id)">Use →</button>
+            <button class="btn-use" @click.stop="useTemplate(tpl.template_id || tpl.id)">Use it</button>
           </div>
         </div>
       </div>

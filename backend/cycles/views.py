@@ -240,9 +240,8 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         if delay_days > 0:
             cycle_task.calculated_start_date += timedelta(days=delay_days)
             cycle_task.calculated_end_date += timedelta(days=delay_days)
-            cycle_task.status = "delayed"
             cycle_task.save(
-                update_fields=["calculated_start_date", "calculated_end_date", "status"]
+                update_fields=["calculated_start_date", "calculated_end_date"]
             )
 
         # The delay must propagate through the whole dependency chain,

@@ -200,7 +200,6 @@ function formatDate(dateStr) {
 function taskBarClass(bar) {
   if (bar.status === 'completed') return 'tb-completed'
   if (bar.isOverdue) return 'tb-overdue'
-  if (bar.isToday) return 'tb-today'
   if (bar.status === 'in_progress') return 'tb-in-progress'
   if (bar.isMandatory) return 'tb-mandatory'
   return 'tb-pending'
@@ -219,8 +218,6 @@ onMounted(async () => {
     <template #topbar>
       <span class="topbar-title">Dashboard</span>
       <span class="topbar-date">{{ new Date().toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) }}</span>
-      <div style="margin-left: auto; display: flex; gap: 10px;">
-        <button type="button" class="page-help-btn" @click="onboardingStore.startTour('dashboard')">
       <div class="topbar-actions">
         <SmartSearch
           context="dashboard"
@@ -333,7 +330,7 @@ onMounted(async () => {
               <div class="section-title">Running cycles timeline</div>
               <div class="gantt-legend">
                 <span class="gl-item"><span class="gl-dot" style="background:#7C3AED;opacity:0.4;"></span>Cycle span</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#475569;"></span>Pending</span>
+                <span class="gl-item"><span class="gl-dot" style="background:#CBD5E1;"></span>Pending</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#F59E0B;"></span>In progress</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#EF4444;"></span>Overdue</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#22C55E;"></span>Completed</span>
@@ -472,6 +469,7 @@ onMounted(async () => {
 /* ── TOPBAR ── */
 .topbar-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
 .topbar-date { font-size: var(--font-label); color: var(--text-secondary); }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
 .page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
@@ -554,11 +552,10 @@ onMounted(async () => {
 .gantt-bar-cycle { height: 20px; background: var(--violet); opacity: 0.15; border-radius: 4px; }
 .gantt-bar-task { height: 16px; }
 
-.tb-pending { background: #475569; }
+.tb-pending { background: #CBD5E1; }
 .tb-in-progress { background: #F59E0B; }
 .tb-completed { background: #22C55E; }
 .tb-overdue { background: #EF4444; }
-.tb-today { background: #3B82F6; }
 .tb-mandatory { background: #7C3AED; }
 
 /* ── TWO COL ── */

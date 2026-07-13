@@ -100,9 +100,6 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/auth/test',
-      redirect: { name: 'dashboard' },
-
       path: '/templates/new',
       name: 'template-create',
       component: TemplateCreateView,

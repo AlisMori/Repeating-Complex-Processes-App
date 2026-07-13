@@ -148,14 +148,13 @@ form { width: 100%; }
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.3px;
-  margin: 0 0 6px;
+  margin: 0 0 5px;
 }
 
 .form-subtitle {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-secondary);
-  line-height: 1.6;
-  margin: 0 0 24px;
+  margin: 0 0 14px;
 }
 
 .error-banner {
@@ -165,11 +164,11 @@ form { width: 100%; }
   padding: 11px 14px;
   font-size: 13px;
   color: #B91C1C;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 .error-banner p { margin: 0; }
 
-.field { margin-bottom: 20px; }
+.field { margin-bottom: 14px; }
 
 .info-box {
   display: flex;
@@ -183,11 +182,11 @@ form { width: 100%; }
 }
 
 .info-box svg { width: 15px; height: 15px; stroke: var(--violet); flex-shrink: 0; margin-top: 2px; }
-.info-box p { font-size: 13px; color: var(--violet-dark); line-height: 1.55; margin: 0; }
+.info-box p { font-size: 14px; color: var(--violet-dark); line-height: 1.55; margin: 0; }
 
 .resend-row {
   text-align: center;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   margin: 0 0 14px;
 }
@@ -197,7 +196,7 @@ form { width: 100%; }
   border: none;
   color: var(--violet);
   font-weight: 500;
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   padding: 0;
   font-family: var(--font-main);
@@ -209,7 +208,7 @@ form { width: 100%; }
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   text-decoration: none;
   margin-top: 16px;

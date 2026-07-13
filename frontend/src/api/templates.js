@@ -128,6 +128,16 @@ export function getTemplateTasks(templateId) {
 }
 
 /**
+ * Get a single template task by ID — used to show the original
+ * template-authored details (e.g. description) for a running
+ * cycle's task, since CycleTask itself doesn't carry that field.
+ * @param {number|string} id
+ */
+export function getTemplateTaskDetail(id) {
+  return api.get(`/template-tasks/${id}/`)
+}
+
+/**
  * Create a task within a template.
  * @param {{
  *   template: number,
