@@ -108,3 +108,81 @@ class TemplateDownloadTests(APITestCase):
         self.assertEqual(data["activities"], [])
         self.assertEqual(data["tasks"], [])
         self.assertEqual(data["dependencies"], [])
+
+    def test_export_includes_tags_and_resolved_names(self):
+        from cycles.models import TaskDependency
+        from templates_mgmt.models import Tag, TemplateTaskTag, TemplateActivityTag
+
+        task_b = TemplateTask.objects.create(
+            template=self.template, task_name="B", day_offset=5, duration_days=2,
+        )
+        TaskDependency.objects.create(task=task_b, depends_on_task=self.task_a)
+
+        important = Tag.objects.create(user=self.user, tag_name="Important")
+        urgent = Tag.objects.create(user=self.user, tag_name="Urgent")
+        TemplateTaskTag.objects.create(template_task=self.task_a, tag=important)
+        TemplateTaskTag.objects.create(template_task=self.task_a, tag=urgent)
+        TemplateActivityTag.objects.create(template_activity=self.activity, tag=important)
+
+        url = reverse("templates-download", args=[self.template.template_id])
+        response = self.client.get(url, {"file_format": "json"})
+        data = json.loads(response.content)
+
+        # Task A carries both its tags, sorted, and the reference list
+        # at the top level has every distinct tag used exactly once.
+        task_a_data = next(t for t in data["tasks"] if t["task_name"] == "A")
+        self.assertEqual(task_a_data["tags"], ["Important", "Urgent"])
+        self.assertEqual(data["tags"], ["Important", "Urgent"])
+
+        activity_data = data["activities"][0]
+        self.assertEqual(activity_data["tags"], ["Important"])
+
+        # Task A's activity_local_id is paired with a resolved name,
+        # and the dependency edge resolves both ends by name too —
+        # not just an opaque id a human has to go cross-reference.
+        self.assertEqual(task_a_data["activity_name"], "Week 1")
+
+        dep = data["dependencies"][0]
+        self.assertEqual(dep["task_name"], "B")
+        self.assertEqual(dep["depends_on_name"], "A")
+
+    def test_csv_export_includes_tags_column(self):
+        from templates_mgmt.models import Tag, TemplateTaskTag
+
+        tag = Tag.objects.create(user=self.user, tag_name="Important")
+        TemplateTaskTag.objects.create(template_task=self.task_a, tag=tag)
+
+        url = reverse("templates-download", args=[self.template.template_id])
+        response = self.client.get(url, {"file_format": "csv"})
+        body = response.content.decode("utf-8")
+
+        self.assertIn("tags", body)
+        self.assertIn("Important", body)
+
+    def test_xlsx_export_has_tags_sheet_and_styled_headers(self):
+        from templates_mgmt.models import Tag, TemplateTaskTag
+        import openpyxl
+        from io import BytesIO
+
+        tag = Tag.objects.create(user=self.user, tag_name="Important")
+        TemplateTaskTag.objects.create(template_task=self.task_a, tag=tag)
+
+        url = reverse("templates-download", args=[self.template.template_id])
+        response = self.client.get(url, {"file_format": "xlsx"})
+
+        workbook = openpyxl.load_workbook(BytesIO(response.content))
+        self.assertEqual(
+            set(workbook.sheetnames),
+            {"Template", "Activities", "Tasks", "Dependencies", "Tags"},
+        )
+
+        tags_sheet = workbook["Tags"]
+        self.assertEqual(tags_sheet["A1"].value, "Tag name")
+        self.assertEqual(tags_sheet["A2"].value, "Important")
+
+        tasks_sheet = workbook["Tasks"]
+        header_cell = tasks_sheet["A1"]
+        self.assertTrue(header_cell.font.bold)
+        self.assertEqual(header_cell.fill.start_color.rgb, "007C3AED")
+        self.assertIn("Tags", [c.value for c in tasks_sheet[1]])
+        self.assertIn("Activity", [c.value for c in tasks_sheet[1]])

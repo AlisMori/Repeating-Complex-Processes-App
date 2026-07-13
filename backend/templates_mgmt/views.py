@@ -67,9 +67,19 @@ class TemplateViewSet(viewsets.ModelViewSet):
     search_fields = ["template_name", "description"]
 
     def get_queryset(self):
-        return Template.objects.filter(
+        # A list/search should only ever show the current tip of each
+        # template's version lineage — every edit forks a new Template
+        # row, so without this filter every past version (10+ for a
+        # template edited 10 times) would show up as its own separate
+        # entry in the picker/library. retrieve/update/destroy/actions
+        # are untouched: a running cycle still needs to reach the
+        # exact frozen version it was created from by id.
+        queryset = Template.objects.filter(
             accessible_templates_q(self.request.user)
         ).distinct()
+        if self.action == "list":
+            queryset = queryset.filter(is_current_version=True)
+        return queryset
 
     def perform_create(self, serializer):
         template = serializer.save(

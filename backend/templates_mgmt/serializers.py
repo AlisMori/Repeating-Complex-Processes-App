@@ -64,6 +64,11 @@ class UserTemplateSerializer(serializers.ModelSerializer):
 
 
 class TagSerializer(serializers.ModelSerializer):
+    usage_count = serializers.SerializerMethodField()
+
+    def get_usage_count(self, obj):
+        return obj.templatetasktag_set.count() + obj.templateactivitytag_set.count()
+
     def validate_tag_name(self, value):
         value = value.strip()
         if not value:
