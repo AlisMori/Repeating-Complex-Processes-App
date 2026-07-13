@@ -183,6 +183,43 @@ def revalidate_task_offsets(template_task):
     for dependency in template_task.dependent_tasks.select_related("task").all():
         check_offset_conflict(dependency.task, template_task)
 
+def collect_dependency_violations(task, depends_on_task, exclude_dependency_id=None):
+    """Runs every check a new or edited TaskDependency edge must pass,
+    circular chain, offset conflict, fan-out capacity, and returns every
+    violation found, not just the first. Used by TaskDependencyViewSet
+    (both the real create/update path and the validate dry run) so the
+    frontend can show a user every reason a proposed edge would be
+    rejected in one response, instead of them fixing one problem,
+    resubmitting, and only then discovering the next one.
+
+    Does not call anything new, would_create_cycle, check_offset_conflict,
+    and assert_dependent_capacity are unchanged, this only composes them
+    and gathers what they report instead of stopping at the first one.
+
+    Returns a list of {"error": ..., "message": ..., ...} dicts, the
+    same shape DependencyConflict.as_response_payload() already
+    produces. An empty list means the edge is valid.
+    """
+    violations = []
+
+    if would_create_cycle(task, depends_on_task):
+        violations.append({
+            "error": "circular_dependency",
+            "message": "This dependency would create a circular chain.",
+            "task_id": task.pk,
+        })
+
+    try:
+        check_offset_conflict(task, depends_on_task)
+    except DependencyConflict as exc:
+        violations.append(exc.as_response_payload())
+
+    try:
+        assert_dependent_capacity(depends_on_task, exclude_dependency_id=exclude_dependency_id)
+    except DependencyConflict as exc:
+        violations.append(exc.as_response_payload())
+
+    return violations
 
 # Date recalculation (FR-6.6, FR-7)
 

@@ -1,5 +1,6 @@
 from datetime import date
 
+from .dependency_engine import get_prerequisite_cycle_tasks
 from .models import CycleTask
 
 # Statuses the system manages automatically, users can never set these
@@ -21,6 +22,13 @@ ALLOWED_TRANSITIONS = {
     "skipped": set(),
 }
 
+# The only two statuses a prerequisite can be retroactively closed out
+# as, see find_unresolved_prerequisites / apply_prerequisite_resolution
+# below. Deliberately not the full ALLOWED_TRANSITIONS set, a
+# prerequisite being resolved this way is always being closed out, never
+# moved to in_progress.
+RESOLVABLE_PREREQUISITE_STATUSES = {"completed", "skipped"}
+
 
 class InvalidStatusTransition(Exception):
     def __init__(self, message):
@@ -36,10 +44,10 @@ class CycleNotRunning(Exception):
 
 def assert_cycle_is_running(cycle):
     """A completed or shut-down cycle is frozen entirely, no status
-    changes, no date shifts, no activity edits. Only a running cycle can
-    be modified. Matches the "422 cycle not running" case already
-    described for the shift endpoint in the Design Doc (API-02), applied
-    consistently everywhere a cycle's contents can be edited.
+    changes, no date shifts, no activity edits, no note edits. Only a
+    running cycle can be modified. Matches the "422 cycle not running"
+    case described for the shift endpoint in the Design Doc (API-02),
+    applied consistently everywhere a cycle's contents can be edited.
     """
     if cycle.status != "running":
         raise CycleNotRunning(
@@ -66,6 +74,43 @@ def validate_status_transition(cycle_task, new_status):
         )
 
 
+def find_unresolved_prerequisites(cycle_task):
+    """Direct prerequisites of cycle_task that are not yet completed or
+    skipped.
+
+    Used when a task is being marked completed out of order, while
+    something it directly depends on is still open. Completing the
+    dependent task first would otherwise leave that prerequisite stuck
+    with no natural way to close it out, the work it was blocking is
+    already done. Only looks at direct prerequisites, not the whole
+    upstream chain, matching how the dependency graph is walked
+    everywhere else in this module (one hop at a time).
+    """
+    return list(
+        get_prerequisite_cycle_tasks(cycle_task.cycle, cycle_task.template_task)
+        .exclude(status__in=RESOLVABLE_PREREQUISITE_STATUSES)
+    )
+
+
+def apply_prerequisite_resolution(cycle_task, new_status):
+    """Directly closes out a prerequisite task as completed or skipped.
+
+    Only ever called after the caller has explicitly asked the user to
+    choose one of the two, see find_unresolved_prerequisites. This
+    bypasses the normal ALLOWED_TRANSITIONS table on purpose, a
+    retroactive close-out did not travel through pending -> in_progress
+    in the app, it already happened in the real world out of order,
+    this just records the outcome the user confirmed.
+    """
+    if new_status not in RESOLVABLE_PREREQUISITE_STATUSES:
+        raise InvalidStatusTransition(
+            "A prerequisite left open by an out of order completion can only "
+            "be resolved as 'completed' or 'skipped'."
+        )
+    cycle_task.status = new_status
+    cycle_task.save(update_fields=["status"])
+
+
 def maybe_complete_cycle(cycle):
     """A running cycle moves to completed once every mandatory task is
     done (completed or skipped), optional tasks don't block this (FR-6.7).
@@ -89,6 +134,29 @@ def maybe_complete_cycle(cycle):
     cycle.save(update_fields=["status"])
 
 
+def activate_started_tasks(today=None):
+    """Background job companion to mark_overdue_tasks. A pending task
+    whose start date has arrived moves itself into in_progress on its
+    own, the user does not need to remember to flip it by hand the
+    moment work actually starts.
+
+    Only touches tasks still sitting in pending, in a running cycle,
+    whose calculated_start_date is today or earlier. Never touches
+    in_progress, completed, skipped, or overdue tasks. A task whose end
+    date has also already passed by the time this runs still gets
+    picked up here first, then mark_overdue_tasks catches it in the
+    same maintenance pass since in_progress is one of the statuses it
+    checks, so nothing is left stuck a full day in the wrong state.
+    """
+    today = today or date.today()
+    candidates = CycleTask.objects.filter(
+        cycle__status="running",
+        calculated_start_date__lte=today,
+        status="pending",
+    )
+    return candidates.update(status="in_progress")
+
+
 def mark_overdue_tasks(today=None):
     """Background job, see cycles/management/commands/mark_overdue_tasks.py.
     Design Doc 4.2.17 lists an overdue-check job as scheduler input, this
@@ -106,3 +174,17 @@ def mark_overdue_tasks(today=None):
         status__in=["pending", "in_progress"],
     )
     return candidates.update(status="overdue")
+
+
+def run_scheduled_maintenance(today=None):
+    """Single entry point the scheduler actually registers with
+    django-q2 (see cycles/management/commands/setup_scheduled_jobs.py).
+    Runs activate_started_tasks before mark_overdue_tasks, in that
+    order, so a task that starts and is already overdue by the same day
+    this runs is caught by the overdue check in the same pass instead
+    of waiting another day inside in_progress.
+    """
+    today = today or date.today()
+    activated = activate_started_tasks(today=today)
+    overdue = mark_overdue_tasks(today=today)
+    return {"activated": activated, "overdue": overdue}
