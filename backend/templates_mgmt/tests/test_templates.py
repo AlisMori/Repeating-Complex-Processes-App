@@ -87,10 +87,11 @@ class TemplateManagementTests(APITestCase):
         template.refresh_from_db()
         self.assertTrue(template.is_current_version)
 
-    def test_editing_a_template_a_cycle_was_created_from_forks_and_does_not_multiply_list_entries(self):
+    def test_editing_a_template_a_cycle_was_created_from_forks_and_every_version_stays_listed(self):
         # Every edit forks a new version and freezes the old one
-        # (is_current_version=False). The list endpoint must only ever
-        # surface the current tip, never one row per historical fork.
+        # (is_current_version=False). The list endpoint shows every
+        # version in the lineage (the client wants old versions still
+        # visible, not hidden), with only the tip marked current.
         from datetime import date
         from cycles.models import CycleInstance
 
@@ -117,9 +118,12 @@ class TemplateManagementTests(APITestCase):
         list_response = self.client.get("/api/templates/")
 
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(list_response.data), 1)
-        self.assertEqual(list_response.data[0]["template_id"], current_id)
-        self.assertEqual(list_response.data[0]["template_name"], "My Template v9")
+        self.assertEqual(len(list_response.data), 11)  # original + 10 forks
+        by_id = {row["template_id"]: row for row in list_response.data}
+        self.assertIn(current_id, by_id)
+        self.assertTrue(by_id[current_id]["is_current_version"])
+        self.assertEqual(by_id[current_id]["template_name"], "My Template v9")
+        self.assertFalse(by_id[template.template_id]["is_current_version"])
 
         # Every frozen historical version is still directly reachable
         # by id (a cycle created from an old version must still work).

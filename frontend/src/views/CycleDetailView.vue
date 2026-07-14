@@ -285,9 +285,13 @@ function toggleActivityExpanded(activity) {
 
 async function updateTaskStatus(taskId, newStatus) {
   try {
-    await updateCycleTask(taskId, newStatus)
+    const { data } = await updateCycleTask(taskId, newStatus)
     await loadCycle()
-    toast.success('Task status updated.')
+    if (data.cycle_just_completed) {
+      toast.success('Last task of the cycle completed/skipped — cycle shut down.')
+    } else {
+      toast.success('Task status updated.')
+    }
   } catch (e) {
     if (isPrerequisitesUnresolvedError(e)) {
       prereqModal.value = {
@@ -368,12 +372,26 @@ const cascadeBlockedMessage = computed(() => {
   return `${names} ${blocked.length > 1 ? 'have' : 'has'} a fixed date and would need to move to keep this dependency chain valid. Check "Move fixed-date tasks too" above, or reschedule ${blocked.length > 1 ? 'them' : 'it'} directly first.`
 })
 
+const cascadeOnlyBlockedByFixedDate = computed(() => {
+  const blocked = (shiftModal.value.preview?.cascade_plan || []).filter(step => !step.shiftable)
+  return blocked.length > 0 && blocked.every(step => step.blocking_reason === 'fixed_date')
+})
+
 const canApplyShift = computed(() => {
   const p = shiftModal.value.preview
   if (!p) return false
   if (p.upstream_conflict) return false
   if (shiftModal.value.scope === 'single' && !p.single_possible) return false
-  if (shiftModal.value.scope === 'cascade' && !p.cascade_possible) return false
+  if (shiftModal.value.scope === 'cascade' && !p.cascade_possible) {
+    // p.cascade_possible reflects the plan as previewed, WITHOUT the
+    // override — the preview endpoint has no override_fixed input,
+    // so it can never itself report "possible" once a downstream
+    // task is fixed-date. If every blocked step is blocked ONLY by a
+    // fixed date (not some other reason), checking "Move fixed-date
+    // tasks too" is exactly what makes it possible; without this,
+    // ticking that box could never actually unblock Apply.
+    if (!(cascadeOnlyBlockedByFixedDate.value && shiftModal.value.overrideFixed)) return false
+  }
   return true
 })
 
@@ -954,7 +972,7 @@ onMounted(loadCycle)
         </p>
 
         <label class="check-item">
-          <input type="checkbox" v-model="shiftModal.overrideFixed" @change="shiftModal.preview = null" />
+          <input type="checkbox" v-model="shiftModal.overrideFixed" />
           <span>Move fixed-date tasks too if this task (or anything downstream of it) is fixed</span>
         </label>
 
@@ -969,7 +987,7 @@ onMounted(loadCycle)
           <div v-else-if="shiftModal.scope === 'single' && !shiftModal.preview.single_possible" class="shift-preview-warning">
             Can't shift this task alone{{ shiftModal.preview.single_blocking_task ? ` — "${shiftModal.preview.single_blocking_task}" would need to move too.` : '.' }} Switch to cascade scope.
           </div>
-          <div v-else-if="shiftModal.scope === 'cascade' && !shiftModal.preview.cascade_possible" class="shift-preview-warning">
+          <div v-else-if="shiftModal.scope === 'cascade' && !shiftModal.preview.cascade_possible && !(cascadeOnlyBlockedByFixedDate && shiftModal.overrideFixed)" class="shift-preview-warning">
             {{ cascadeBlockedMessage }}
           </div>
           <div v-else class="shift-preview-row" style="color: var(--success);">

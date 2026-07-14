@@ -183,6 +183,14 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
 
         serializer.save()
 
+    def update(self, request, *args, **kwargs):
+        self._cycle_just_completed = False
+        response = super().update(request, *args, **kwargs)
+        if self._cycle_just_completed:
+            response.data = dict(response.data)
+            response.data["cycle_just_completed"] = True
+        return response
+
     def perform_update(self, serializer):
         # Module 9, FR-6.1/FR-6.4. Status is the only field this
         # serializer allows through, everything else is read-only, so
@@ -209,7 +217,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
             updated = serializer.save()
 
             if updated.status in ("completed", "skipped"):
-                maybe_complete_cycle(updated.cycle)
+                self._cycle_just_completed = maybe_complete_cycle(updated.cycle)
 
     def _resolve_prerequisites_before_completion(self, cycle_task):
         # A task is being marked completed while something it directly

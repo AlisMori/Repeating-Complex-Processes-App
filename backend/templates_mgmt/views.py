@@ -69,18 +69,16 @@ class TemplateViewSet(viewsets.ModelViewSet):
     search_fields = ["template_name", "description"]
 
     def get_queryset(self):
-        # A list/search should only ever show the current tip of each
-        # template's version lineage — every edit forks a new Template
-        # row, so without this filter every past version (10+ for a
-        # template edited 10 times) would show up as its own separate
-        # entry in the picker/library. retrieve/update/destroy/actions
-        # are untouched: a running cycle still needs to reach the
-        # exact frozen version it was created from by id.
+        # Every version of every template the user can access is shown
+        # in the library, not just the current tip of each lineage —
+        # forking (editing, or "Copy") freezes the row it forked from
+        # rather than deleting it, and the client wants that frozen
+        # version to stay visible in the list, not just reachable via
+        # /versions/. The frontend shows a "Current version" badge to
+        # tell the tip apart from older versions in the same lineage.
         queryset = Template.objects.filter(
             accessible_templates_q(self.request.user)
         ).distinct()
-        if self.action == "list":
-            queryset = queryset.filter(is_current_version=True)
         return queryset
 
     def perform_create(self, serializer):

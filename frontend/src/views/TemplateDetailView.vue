@@ -698,6 +698,12 @@ onMounted(loadTemplate)
       @confirm="confirmDelete"
     >
       <p>Are you sure you want to delete this template? This cannot be undone.</p>
+      <p class="delete-warning-note">
+        Any cycles already created from this template are kept — they'll stay visible on the
+        Cycles page with their history intact. Any that are still <strong>running will be shut
+        down</strong> as part of this delete, since they'll no longer have a template to
+        validate against.
+      </p>
     </BaseModal>
 
     <!-- DELETE TASK/ACTIVITY CONFIRM MODAL -->
@@ -751,6 +757,14 @@ onMounted(loadTemplate)
 </template>
 
 <style scoped>
+.delete-warning-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+  font-size: var(--font-hint);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
 .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: var(--font-label); }
 .breadcrumb-link { color: var(--text-muted); cursor: pointer; }
 .breadcrumb-link:hover { color: var(--violet); }

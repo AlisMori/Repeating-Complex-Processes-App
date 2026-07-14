@@ -362,12 +362,26 @@ onMounted(async () => {
       @confirm="onDelete"
     >
       <p class="modal-desc">This will permanently delete the template. This cannot be undone.</p>
+      <p class="modal-desc delete-warning-note">
+        Any cycles already created from this template are kept — they'll stay visible on the
+        Cycles page with their history intact. Any that are still <strong>running will be shut
+        down</strong> as part of this delete, since they'll no longer have a template to
+        validate against.
+      </p>
     </BaseModal>
 
   </AppLayout>
 </template>
 
 <style scoped>
+.delete-warning-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+  font-size: var(--font-hint);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
 .topbar-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); flex: 1; }
 
 .search-box { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-light); border-radius: 7px; padding: 7px 12px; background: var(--bg-page); width: 200px; }

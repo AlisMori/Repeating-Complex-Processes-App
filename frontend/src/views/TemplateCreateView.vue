@@ -403,8 +403,8 @@ function dependentCount(localId) {
 }
 
 function offsetConflict(taskLocalId, candidateLocalId) {
-  const task = tasks.value.find(t => t._localId === taskLocalId)
-  const candidate = tasks.value.find(t => t._localId === candidateLocalId)
+  const task = tasks.value.find(t => String(t._localId) === String(taskLocalId))
+  const candidate = tasks.value.find(t => String(t._localId) === String(candidateLocalId))
   if (!task || !candidate) return true
   const upstreamEnd = Number(candidate.day_offset) + Number(candidate.duration_days || 1)
   return Number(task.day_offset) < upstreamEnd
