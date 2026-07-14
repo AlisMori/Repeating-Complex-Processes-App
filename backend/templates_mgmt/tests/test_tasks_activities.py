@@ -1,4 +1,5 @@
 from django.urls import reverse
+from datetime import date
 from rest_framework import status
 from rest_framework.test import APITestCase
 from accounts.models import User
@@ -8,6 +9,7 @@ from templates_mgmt.models import (
     TemplateActivity,
     Tag,
 )
+from cycles.models import CycleInstance
 
 class TaskActivityManagementTests(APITestCase):
 
@@ -24,6 +26,13 @@ class TaskActivityManagementTests(APITestCase):
             user=self.user,
             template_name="Test Template",
             description="Testing"
+        )
+        # A cycle already exists from this template in every test
+        # below, so editing it is expected to fork a new version
+        # (see templates_mgmt/services.py: get_editable_template only
+        # forks once a cycle depends on the current row).
+        CycleInstance.objects.create(
+            user=self.user, template=self.template, cycle_name="Existing run", start_date=date.today(),
         )
 
     def test_create_template_task(self):

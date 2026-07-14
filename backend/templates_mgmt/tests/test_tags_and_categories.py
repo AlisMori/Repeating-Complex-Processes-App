@@ -132,10 +132,14 @@ class TagApiTests(APITestCase):
         self.assertTrue(Tag.objects.filter(pk=other_tag.tag_id).exists())
 
     def test_tag_assignments_survive_a_template_version_fork(self):
-        # Every edit to a template forks a new version with fresh
-        # task/activity rows — tag ASSIGNMENTS (not the Tag itself,
-        # which is per-user) have to be recreated onto those new rows
-        # or they silently vanish the moment anyone edits anything.
+        # Tag ASSIGNMENTS (not the Tag itself, which is per-user) have
+        # to be recreated onto a version fork's fresh task/activity
+        # rows or they silently vanish — exercised here on a template
+        # a cycle has already been created from, since that's the
+        # case that actually forks (see get_editable_template).
+        from datetime import date
+        from cycles.models import CycleInstance
+
         template = Template.objects.create(user=self.user, template_name="Onboarding")
         activity = TemplateActivity.objects.create(
             template=template, activity_name="Week 1", start_offset_days=0, end_offset_days=5,
@@ -146,9 +150,13 @@ class TagApiTests(APITestCase):
         important = Tag.objects.create(user=self.user, tag_name="Important")
         TemplateTaskTag.objects.create(template_task=task, tag=important)
         TemplateActivityTag.objects.create(template_activity=activity, tag=important)
+        CycleInstance.objects.create(
+            user=self.user, template=template, cycle_name="Existing run", start_date=date.today(),
+        )
 
-        # Any mutation forks a new version — creating a second task is
-        # as good as any other for exercising that path.
+        # A mutation on a locked template forks a new version —
+        # creating a second task is as good as any other for
+        # exercising that path.
         response = self.client.post("/api/template-tasks/", {
             "template": template.template_id,
             "task_name": "Second task",
@@ -219,8 +227,14 @@ class TemplateCategoryApiTests(APITestCase):
         self.assertEqual(TemplateCategory.objects.filter(user=self.user).count(), 1)
 
     def test_associating_a_template_with_a_category_forks_a_new_version(self):
+        from datetime import date
+        from cycles.models import CycleInstance
+
         category = TemplateCategory.objects.create(user=self.user, category_name="Academic")
         template = Template.objects.create(user=self.user, template_name="T1")
+        CycleInstance.objects.create(
+            user=self.user, template=template, cycle_name="Existing run", start_date=date.today(),
+        )
 
         response = self.client.put(
             f"/api/templates/{template.template_id}/",

@@ -17,7 +17,7 @@ from core.permissions import (
 )
 
 from templates_mgmt.models import Template, TemplateTask
-from templates_mgmt.services import fork_new_version, new_version_payload
+from templates_mgmt.services import get_editable_template, new_version_payload
 from .models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 from .services import generate_cycle_runtime_records, validate_activity_bounds
 from .dependency_engine import (
@@ -500,7 +500,7 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         self._reject_if_invalid(task, depends_on_task)
 
         with transaction.atomic():
-            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            new_template, _, task_id_map, forked = get_editable_template(task.template, request.user)
             new_edge = TaskDependency.objects.create(
                 task=task_id_map[task.template_task_id],
                 depends_on_task=task_id_map[depends_on_task.template_task_id],
@@ -509,7 +509,8 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         response_data = TaskDependencySerializer(
             new_edge, context=self.get_serializer_context()
         ).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -528,10 +529,12 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         self._reject_if_invalid(new_task, new_depends_on, exclude_dependency_id=instance.pk)
 
         with transaction.atomic():
-            # The fork happens against the edge's own (pre-edit) template,
-            # copying it also copies this edge exactly as it was, then the
-            # requested change is applied to that copy.
-            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            # The fork (when it happens) is against the edge's own
+            # (pre-edit) template, copying it also copies this edge
+            # exactly as it was, then the requested change is applied
+            # to that copy. When the template isn't locked yet, this
+            # is the same row, edited directly instead.
+            new_template, _, task_id_map, forked = get_editable_template(task.template, request.user)
             copied_edge = TaskDependency.objects.get(
                 task=task_id_map[task.template_task_id],
                 depends_on_task=task_id_map[old_depends_on.template_task_id],
@@ -543,7 +546,8 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         response_data = TaskDependencySerializer(
             copied_edge, context=self.get_serializer_context()
         ).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
@@ -553,19 +557,21 @@ class TaskDependencyViewSet(viewsets.ModelViewSet):
         self._validate_editable_dependency_tasks(task, depends_on_task)
 
         with transaction.atomic():
-            new_template, _, task_id_map = fork_new_version(task.template, request.user)
+            new_template, _, task_id_map, forked = get_editable_template(task.template, request.user)
             TaskDependency.objects.filter(
                 task=task_id_map[task.template_task_id],
                 depends_on_task=task_id_map[depends_on_task.template_task_id],
             ).delete()
 
-        return Response(
-            {
-                "message": "Dependency removed, a new template version was created.",
-                "new_template_version": new_version_payload(new_template),
-            },
-            status=status.HTTP_200_OK,
-        )
+        response = {
+            "message": (
+                "Dependency removed, a new template version was created." if forked
+                else "Dependency removed."
+            ),
+        }
+        if forked:
+            response["new_template_version"] = new_version_payload(new_template)
+        return Response(response, status=status.HTTP_200_OK)
 
     def _validate_editable_dependency_tasks(self, task, depends_on_task):
         if task.template_id != depends_on_task.template_id:

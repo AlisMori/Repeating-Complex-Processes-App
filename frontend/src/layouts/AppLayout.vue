@@ -57,6 +57,12 @@ const navItems = [
     tourKey: 'templates',
     icon: `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>`,
   },
+  {
+    label: 'Tags',
+    name: 'tags',
+    tourKey: 'tags',
+    icon: `<path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.5" fill="currentColor" stroke="none"/>`,
+  },
 ]
 </script>
 

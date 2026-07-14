@@ -116,6 +116,53 @@ def fork_new_version(original_template, user):
     return new_template, activity_map, task_id_map
 
 
+def template_is_locked(template):
+    """True if this Template row must never be edited in place.
+
+    Two independent reasons a row is locked:
+    - It's no longer the current version (is_current_version=False).
+      It's already a frozen historical marker, something may already
+      be pointing at this exact id specifically (the versions list,
+      a bookmark, a link someone shared), mutating it in place would
+      silently rewrite history out from under that reference.
+    - At least one cycle has been created from it. A CycleInstance's
+      CycleTask/CycleActivity rows are a snapshot copied off the
+      template's tasks/activities at create_cycle time, they don't
+      stay in sync with later template edits, they're just a
+      starting point.
+
+    Editing a row in place is only safe when neither is true: it's
+    still the live, current row, and nothing has used it yet.
+    """
+    return (not template.is_current_version) or template.cycle_instances.exists()
+
+
+def get_editable_template(template, user):
+    """Returns the Template row a structural edit (task, activity, or
+    dependency change) should actually be applied to, together with
+    activity_map / task_id_map (old pk -> instance, scoped to that
+    row) for the caller to remap any incoming references against, and
+    whether a new version was forked.
+
+    While a template has never been used to create a cycle yet
+    (template_is_locked is False, e.g. it's still being drafted for
+    the first time, or a version was just forked and is being
+    refined further before anyone has used it), edits are applied
+    directly to the row: nothing depends on this exact snapshot, so
+    forking here would only create a silent, useless version on every
+    save. The moment a cycle has been created from a template, that
+    protection matters again, edits fork a new version exactly like
+    before, so the cycle's frozen rows are never affected.
+    """
+    if not template_is_locked(template):
+        activity_map = {a.template_activity_id: a for a in template.template_activities.all()}
+        task_id_map = {t.template_task_id: t for t in template.template_tasks.all()}
+        return template, activity_map, task_id_map, False
+
+    new_template, activity_map, task_id_map = fork_new_version(template, user)
+    return new_template, activity_map, task_id_map, True
+
+
 def new_version_payload(new_template):
     """Small block every forking endpoint attaches to its response so
     the frontend always knows a new version now exists and what its id

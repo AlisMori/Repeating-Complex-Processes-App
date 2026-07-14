@@ -1,5 +1,3 @@
-import re
-
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.http import HttpResponse
@@ -29,6 +27,7 @@ from .services import (
     deep_copy_template_contents,
     expand_activity_to_include_task,
     fork_new_version,
+    get_editable_template,
     maybe_shrink_activity,
     new_version_payload,
 )
@@ -101,7 +100,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
 
         with transaction.atomic():
-            new_template, _, _ = fork_new_version(original_template, request.user)
+            new_template, _, _, forked = get_editable_template(original_template, request.user)
 
             for field in ("template_name", "description", "is_public"):
                 if field in request.data:
@@ -125,50 +124,60 @@ class TemplateViewSet(viewsets.ModelViewSet):
 
         return Response(
             {
-                "message": "New template version created successfully.",
+                "message": (
+                    "New template version created successfully." if forked
+                    else "Template updated successfully."
+                ),
                 "template": TemplateSerializer(new_template).data,
             },
             status=status.HTTP_200_OK,
         )
 
+    def destroy(self, request, *args, **kwargs):
+        # Cycles already created from this template must survive the
+        # delete, they're a snapshot of what the template looked like
+        # at create_cycle time, not a live view of it, deleting the
+        # template later shouldn't erase someone's history of a cycle
+        # they actually ran. CycleInstance.template (and CycleTask.
+        # template_task / CycleActivity.template_activity) are
+        # SET_NULL on delete for exactly this reason: the rows stay,
+        # only the now-meaningless link back to the deleted template
+        # is cleared. Anything still running is shut down first so
+        # nothing keeps ticking against a template that no longer
+        # exists to validate its own dependency rules against.
+        template = self.get_object()
+        if not user_can_edit_template(request.user, template):
+            raise PermissionDenied("You do not have permission to delete this template.")
+
+        with transaction.atomic():
+            template.cycle_instances.filter(status="running").update(status="shut_down")
+            self.perform_destroy(template)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=True, methods=["post"])
     def duplicate(self, request, pk=None):
-        # Independent copy, its own version lineage starting at 1, the
-        # original is completely untouched (not frozen, still current).
+        # "Copy template" in the frontend: a plain version fork, a new
+        # version in the SAME lineage (Vx+1), an exact copy with
+        # nothing edited, the original is frozen exactly like any
+        # other version fork (see fork_new_version). This action's
+        # permission class already requires edit rights to reach it
+        # at all (POST is not a safe method), so there's no separate
+        # "read-only" caller case to handle here.
         original_template = self.get_object()
-        if not user_can_access_template(request.user, original_template):
+        if not user_can_edit_template(request.user, original_template):
             raise PermissionDenied("You do not have permission to duplicate this template.")
 
         with transaction.atomic():
-            base_name = re.sub(r"(\s*\(Copy\))+$", "", original_template.template_name).strip()
-            duplicate_template = Template.objects.create(
-                user=request.user,
-                template_version=1,
-                parent_template=None,
-                is_current_version=True,
-                template_name=request.data.get("template_name")
-                or f"{base_name} (Copy)",
-                description=original_template.description,
-                is_public=False,
-                created_by_type=original_template.created_by_type,
-                # Only carried over when the duplicating user actually
-                # owns that category — a category is per-user, so this
-                # only ever fires when duplicating your own template.
-                category=original_template.category
-                if original_template.category_id and original_template.category.user_id == request.user.id
-                else None,
-            )
-            UserTemplate.objects.get_or_create(
-                user=request.user,
-                template=duplicate_template,
-                defaults={"access_type": "owner"},
-            )
-            deep_copy_template_contents(original_template, duplicate_template)
+            new_template, _, _ = fork_new_version(original_template, request.user)
+            if request.data.get("template_name"):
+                new_template.template_name = request.data["template_name"]
+                new_template.save(update_fields=["template_name"])
 
         return Response(
             {
-                "message": "Template duplicated successfully.",
-                "template": TemplateSerializer(duplicate_template).data,
+                "message": "Template copied as a new version successfully.",
+                "template": TemplateSerializer(new_template).data,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -464,7 +473,7 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
 
         with transaction.atomic():
-            new_template, activity_map, _ = fork_new_version(template, request.user)
+            new_template, activity_map, _, forked = get_editable_template(template, request.user)
 
             incoming_activity = serializer.validated_data.get("template_activity")
             new_activity = (
@@ -488,7 +497,8 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
             expand_activity_to_include_task(new_task)
 
         response_data = TemplateTaskSerializer(new_task, context=self.get_serializer_context()).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -507,7 +517,7 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         old_activity_id = instance.template_activity_id
 
         with transaction.atomic():
-            new_template, activity_map, task_id_map = fork_new_version(template, request.user)
+            new_template, activity_map, task_id_map, forked = get_editable_template(template, request.user)
             copied_task = task_id_map[instance.template_task_id]
             old_activity_copy = activity_map.get(old_activity_id)
 
@@ -539,7 +549,8 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
                 maybe_shrink_activity(copied_task.template_activity, old_start, old_end)
 
         response_data = TemplateTaskSerializer(copied_task, context=self.get_serializer_context()).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
@@ -553,20 +564,22 @@ class TemplateTaskViewSet(viewsets.ModelViewSet):
         old_activity_id = instance.template_activity_id
 
         with transaction.atomic():
-            new_template, activity_map, task_id_map = fork_new_version(template, request.user)
+            new_template, activity_map, task_id_map, forked = get_editable_template(template, request.user)
             copied_task = task_id_map.get(instance.template_task_id)
             copied_activity = activity_map.get(old_activity_id)
             if copied_task is not None:
                 copied_task.delete()
             maybe_shrink_activity(copied_activity, old_start, old_end)
 
-        return Response(
-            {
-                "message": "Task removed, a new template version was created.",
-                "new_template_version": new_version_payload(new_template),
-            },
-            status=status.HTTP_200_OK,
-        )
+        response = {
+            "message": (
+                "Task removed, a new template version was created." if forked
+                else "Task removed."
+            ),
+        }
+        if forked:
+            response["new_template_version"] = new_version_payload(new_template)
+        return Response(response, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post", "delete"])
     def note(self, request, pk=None):
@@ -622,7 +635,7 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
 
         with transaction.atomic():
-            new_template, _, _ = fork_new_version(template, request.user)
+            new_template, _, _, forked = get_editable_template(template, request.user)
             new_activity = TemplateActivity.objects.create(
                 template=new_template,
                 activity_name=serializer.validated_data["activity_name"],
@@ -635,7 +648,8 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
         response_data = TemplateActivitySerializer(
             new_activity, context=self.get_serializer_context()
         ).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -677,7 +691,7 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
                 })
 
         with transaction.atomic():
-            new_template, activity_map, _ = fork_new_version(template, request.user)
+            new_template, activity_map, _, forked = get_editable_template(template, request.user)
             copied_activity = activity_map[instance.template_activity_id]
 
             for field in ("activity_name", "description", "start_offset_days", "end_offset_days"):
@@ -688,7 +702,8 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
         response_data = TemplateActivitySerializer(
             copied_activity, context=self.get_serializer_context()
         ).data
-        response_data["new_template_version"] = new_version_payload(new_template)
+        if forked:
+            response_data["new_template_version"] = new_version_payload(new_template)
         return Response(response_data, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
@@ -700,19 +715,21 @@ class TemplateActivityViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to modify this template.")
 
         with transaction.atomic():
-            new_template, activity_map, _ = fork_new_version(template, request.user)
+            new_template, activity_map, _, forked = get_editable_template(template, request.user)
             copied_activity = activity_map.get(instance.template_activity_id)
             if copied_activity is not None:
                 copied_activity.template_tasks.all().delete()
                 copied_activity.delete()
 
-        return Response(
-            {
-                "message": "Activity and its tasks removed, a new template version was created.",
-                "new_template_version": new_version_payload(new_template),
-            },
-            status=status.HTTP_200_OK,
-        )
+        response = {
+            "message": (
+                "Activity and its tasks removed, a new template version was created." if forked
+                else "Activity and its tasks removed."
+            ),
+        }
+        if forked:
+            response["new_template_version"] = new_version_payload(new_template)
+        return Response(response, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post", "delete"])
     def note(self, request, pk=None):

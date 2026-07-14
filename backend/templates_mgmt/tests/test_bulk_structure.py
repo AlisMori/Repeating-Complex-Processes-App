@@ -66,13 +66,47 @@ class SaveStructureTests(APITestCase):
         self.assertTrue(TemplateTaskTag.objects.filter(template_task=new_task, tag=tag).exists())
         self.assertTrue(TemplateActivityTag.objects.filter(template_activity=new_activity, tag=tag).exists())
 
-    def test_editing_an_already_populated_template_forks_exactly_one_new_version(self):
-        # Once a template actually has content, a cycle could be
-        # running from it — THIS is the case that must fork rather
-        # than overwrite, freezing the version any existing cycle
-        # depends on.
+    def test_editing_an_unlocked_populated_template_still_writes_in_place(self):
+        # This template already has content from an earlier draft
+        # save, but still no cycle has ever been created from it, so
+        # there's still nothing a fork would be protecting. This is
+        # exactly the "keep saving while drafting" flow, it must not
+        # fork a new version on every single save.
         TemplateTask.objects.create(
             template=self.template, task_name="Original", day_offset=0, duration_days=1,
+        )
+        payload = {
+            "activities": [],
+            "tasks": [{"local_id": "T1", "task_name": "Replacement", "day_offset": 0, "duration_days": 1}],
+            "dependencies": [],
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        new_id = response.data["new_template_version"]["template_id"]
+
+        self.assertEqual(new_id, self.template.template_id)
+        self.assertEqual(Template.objects.filter(parent_template=self.template).count(), 0)
+        self.assertTrue(Template.objects.get(pk=self.template.template_id).is_current_version)
+
+        # The old draft content was replaced, not piled on top of.
+        self.assertFalse(TemplateTask.objects.filter(template=self.template, task_name="Original").exists())
+        self.assertEqual(TemplateTask.objects.filter(template_id=new_id).count(), 1)
+        self.assertEqual(TemplateTask.objects.get(template_id=new_id).task_name, "Replacement")
+
+    def test_editing_a_template_a_cycle_was_created_from_forks_exactly_one_new_version(self):
+        # Once a cycle actually exists from this template, THIS is the
+        # case that must fork rather than overwrite, freezing the
+        # version that cycle depends on.
+        from datetime import date
+        from cycles.models import CycleInstance
+
+        TemplateTask.objects.create(
+            template=self.template, task_name="Original", day_offset=0, duration_days=1,
+        )
+        CycleInstance.objects.create(
+            user=self.user, template=self.template, cycle_name="Run 1", start_date=date.today(),
         )
         payload = {
             "activities": [],
@@ -95,7 +129,7 @@ class SaveStructureTests(APITestCase):
         self.assertEqual(TemplateTask.objects.filter(template_id=new_id).count(), 1)
         self.assertEqual(TemplateTask.objects.get(template_id=new_id).task_name, "Replacement")
 
-    def test_resubmitting_twice_never_duplicates_within_either_call(self):
+    def test_resubmitting_twice_before_any_cycle_exists_keeps_writing_in_place(self):
         payload = {
             "activities": [],
             "tasks": [{"local_id": "T1", "task_name": "Solo task", "day_offset": 0, "duration_days": 1}],
@@ -107,11 +141,35 @@ class SaveStructureTests(APITestCase):
         first_id = first.data["new_template_version"]["template_id"]
         self.assertEqual(TemplateTask.objects.filter(template_id=first_id).count(), 1)
 
-        # Simulates "Back" then resubmitting the exact same structure —
-        # each call is atomic and independent, so this is a SECOND
-        # fork with its own single task, not four tasks piled up.
-        url_on_new_version = f"/api/templates/{first_id}/save_structure/"
-        second = self.client.post(url_on_new_version, payload, format="json")
+        # Simulates "Back" then resubmitting the exact same structure
+        # while still drafting (no cycle yet) — same row both times,
+        # not a second throwaway version, and never more than one task.
+        url_on_current_version = f"/api/templates/{first_id}/save_structure/"
+        second = self.client.post(url_on_current_version, payload, format="json")
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        second_id = second.data["new_template_version"]["template_id"]
+
+        self.assertEqual(TemplateTask.objects.filter(template_id=second_id).count(), 1)
+        self.assertEqual(first_id, second_id)
+
+    def test_resubmitting_twice_after_a_cycle_exists_forks_each_time(self):
+        from datetime import date
+        from cycles.models import CycleInstance
+
+        payload = {
+            "activities": [],
+            "tasks": [{"local_id": "T1", "task_name": "Solo task", "day_offset": 0, "duration_days": 1}],
+            "dependencies": [],
+        }
+
+        first = self.client.post(self.url, payload, format="json")
+        first_id = first.data["new_template_version"]["template_id"]
+        CycleInstance.objects.create(
+            user=self.user, template_id=first_id, cycle_name="Run 1", start_date=date.today(),
+        )
+
+        url_on_current_version = f"/api/templates/{first_id}/save_structure/"
+        second = self.client.post(url_on_current_version, payload, format="json")
         self.assertEqual(second.status_code, status.HTTP_201_CREATED)
         second_id = second.data["new_template_version"]["template_id"]
 
@@ -240,7 +298,7 @@ class SaveStructureTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_empty_structure_is_valid_and_clears_everything(self):
+    def test_empty_structure_before_any_cycle_clears_in_place(self):
         activity = TemplateActivity.objects.create(
             template=self.template, activity_name="Old", start_offset_days=0, end_offset_days=1,
         )
@@ -253,6 +311,30 @@ class SaveStructureTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         new_id = response.data["new_template_version"]["template_id"]
+        self.assertEqual(new_id, self.template.template_id)
+        self.assertEqual(TemplateTask.objects.filter(template_id=new_id).count(), 0)
+        self.assertEqual(TemplateActivity.objects.filter(template_id=new_id).count(), 0)
+
+    def test_empty_structure_after_a_cycle_exists_leaves_the_old_version_untouched(self):
+        from datetime import date
+        from cycles.models import CycleInstance
+
+        activity = TemplateActivity.objects.create(
+            template=self.template, activity_name="Old", start_offset_days=0, end_offset_days=1,
+        )
+        TemplateTask.objects.create(
+            template=self.template, template_activity=activity, task_name="Old task", day_offset=0, duration_days=1,
+        )
+        CycleInstance.objects.create(
+            user=self.user, template=self.template, cycle_name="Run 1", start_date=date.today(),
+        )
+        payload = {"activities": [], "tasks": [], "dependencies": []}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        new_id = response.data["new_template_version"]["template_id"]
+        self.assertNotEqual(new_id, self.template.template_id)
         self.assertEqual(TemplateTask.objects.filter(template_id=new_id).count(), 0)
         self.assertEqual(TemplateActivity.objects.filter(template_id=new_id).count(), 0)
         # Old version is untouched, frozen exactly as it was.

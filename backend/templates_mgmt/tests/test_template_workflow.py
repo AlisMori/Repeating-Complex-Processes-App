@@ -20,11 +20,13 @@ class TemplateWorkflowTests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_full_template_management_workflow(self):
-        # Each task/activity create forks a new template version, a real
-        # client has to follow the current version forward at each step
-        # rather than reusing the id it started with, this test does the
-        # same: current_template_id always points at whatever version the
-        # previous step actually landed on.
+        # No cycle is ever created from this template in this test, so
+        # task/activity creates write in place onto the still-current,
+        # still-unused row (see get_editable_template). Duplicating
+        # forks a real new version (Vx+1) of the current row though,
+        # which freezes it, so the later direct edit against that now
+        # non-current id forks again — a client still has to follow
+        # the version forward from that point on.
         create_response = self.client.post(
             "/api/templates/",
             {
@@ -53,7 +55,7 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(task_response.status_code, status.HTTP_201_CREATED)
-        current_template_id = task_response.data["new_template_version"]["template_id"]
+        self.assertNotIn("new_template_version", task_response.data)
 
         activity_response = self.client.post(
             "/api/template-activities/",
@@ -68,10 +70,11 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(activity_response.status_code, status.HTTP_201_CREATED)
-        current_template_id = activity_response.data["new_template_version"]["template_id"]
+        self.assertNotIn("new_template_version", activity_response.data)
 
-        # By now current_template_id has both the task and the activity,
-        # duplicating it should carry both across.
+        # current_template_id now has both the task and the activity,
+        # duplicating it should carry both across, and forks it
+        # forward to Vx+1, freezing current_template_id itself.
         duplicate_response = self.client.post(
             f"/api/templates/{current_template_id}/duplicate/",
             format="json",
@@ -87,6 +90,8 @@ class TemplateWorkflowTests(APITestCase):
             TemplateActivity.objects.filter(template_id=copied_template_id).exists()
         )
 
+        # current_template_id is frozen now (superseded by the
+        # duplicate's fork), editing it directly by id forks it again.
         update_response = self.client.put(
             f"/api/templates/{current_template_id}/",
             {
@@ -107,9 +112,9 @@ class TemplateWorkflowTests(APITestCase):
         )
 
         self.assertEqual(versions_response.status_code, status.HTTP_200_OK)
-        # Original -> task fork -> activity fork -> this update's fork,
-        # at least 4 versions in the lineage by now.
-        self.assertGreaterEqual(len(versions_response.data), 4)
+        # Original -> duplicate's fork -> this update's fork, at least
+        # 3 versions in the lineage by now.
+        self.assertGreaterEqual(len(versions_response.data), 3)
 
         share_response = self.client.post(
             f"/api/templates/{current_template_id}/share/",

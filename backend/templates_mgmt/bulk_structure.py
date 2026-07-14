@@ -161,29 +161,36 @@ def validate_structure_payload(payload, user):
 
 
 def apply_structure_payload(template, payload, user):
-    """Writes the payload as ONE new template version — UNLESS this is
-    the very first save this template has ever had (no tasks, no
-    activities exist on it yet), in which case it writes directly
-    into the existing row instead of forking. Forking exists to keep
-    a version a cycle is already using frozen and untouched; a
-    template that has never had any content yet can't possibly have
-    a cycle running from it, so there's nothing to protect by forking
-    — doing it anyway just leaves an empty, instantly-frozen
-    throwaway version behind every single time a new template is
-    created, which is confusing in a "Versions" view and wasteful for
-    no benefit.
+    """Writes the payload as ONE new template version — UNLESS no
+    cycle has ever been created from this template yet, in which case
+    it writes directly into the existing row instead of forking.
+    Forking exists to keep a version a cycle is already using frozen
+    and untouched; a template nothing has been created from yet can't
+    possibly have a cycle running from it, so there's nothing to
+    protect by forking — doing it anyway just leaves a throwaway
+    version behind on every single save while a template is still
+    being drafted (the first save AND every save after it, until it's
+    actually used), which is confusing in a "Versions" view and
+    wasteful for no benefit. See get_editable_template/
+    template_is_locked in services.py for the same rule applied to
+    the single-field task/activity/dependency endpoints.
 
     Caller must have already validated with validate_structure_payload
     — this function assumes the payload is valid and does not re-check.
     """
-    is_first_ever_save = (
-        not TemplateTask.objects.filter(template=template).exists()
-        and not TemplateActivity.objects.filter(template=template).exists()
-    )
+    is_locked = (not template.is_current_version) or template.cycle_instances.exists()
 
     with transaction.atomic():
-        if is_first_ever_save:
+        if not is_locked:
             target_template = template
+            # Not necessarily the first save any more, a second or
+            # third draft save reuses this same row too, so whatever
+            # it already holds needs clearing before the payload's
+            # full intended structure is written. Dependencies and tag
+            # assignments cascade-delete with their task/activity, no
+            # need to clear them separately.
+            TemplateTask.objects.filter(template=target_template).delete()
+            TemplateActivity.objects.filter(template=target_template).delete()
         else:
             template.is_current_version = False
             template.save(update_fields=["is_current_version"])

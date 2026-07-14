@@ -1,17 +1,20 @@
 from django.contrib.auth import get_user_model
+from datetime import date
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from templates_mgmt.models import Template, TemplateTask, TemplateActivity
+from cycles.models import CycleInstance
 
 User = get_user_model()
 
 
 class TaskActivityWorkflowTests(APITestCase):
-    """Every task/activity create, update, or delete forks a new
-    template version, the original template and its rows are frozen,
-    untouched. These workflows follow the version forward at each step
-    instead of assuming the same row keeps getting edited in place.
+    """Every task/activity create, update, or delete on a template a
+    cycle has already been created from forks a new template version,
+    the original template and its rows are frozen, untouched. These
+    workflows follow the version forward at each step instead of
+    assuming the same row keeps getting edited in place.
     """
 
     def setUp(self):
@@ -25,6 +28,11 @@ class TaskActivityWorkflowTests(APITestCase):
             user=self.user,
             template_name="Workflow Template",
             description="Template for task and activity workflow testing",
+        )
+        # A cycle already exists, so every edit below is expected to
+        # fork (see get_editable_template in templates_mgmt/services.py).
+        CycleInstance.objects.create(
+            user=self.user, template=self.template, cycle_name="Existing run", start_date=date.today(),
         )
 
     def test_task_workflow_create_update_delete(self):
@@ -41,9 +49,14 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("new_template_version", create_response.data)
 
         task_id = create_response.data["template_task_id"]
         self.assertTrue(TemplateTask.objects.filter(pk=task_id).exists())
+        # self.template already had a cycle on it, so creating the
+        # task forked a new version, self.template's own row is
+        # untouched and still has no tasks of its own.
+        self.assertEqual(TemplateTask.objects.filter(template=self.template).count(), 0)
 
         update_response = self.client.patch(
             f"/api/template-tasks/{task_id}/",
@@ -54,15 +67,13 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
-        self.assertIn("new_template_version", update_response.data)
+        # No cycle has ever been created from THIS version yet (the
+        # one the task just landed on), so this edit writes in place
+        # instead of forking yet again.
+        self.assertNotIn("new_template_version", update_response.data)
 
-        # The original task is frozen, untouched, still "Initial Task".
-        original_task = TemplateTask.objects.get(pk=task_id)
-        self.assertEqual(original_task.task_name, "Initial Task")
-
-        # The update landed on the new version's copy of the task instead.
         updated_task_id = update_response.data["template_task_id"]
-        self.assertNotEqual(updated_task_id, task_id)
+        self.assertEqual(updated_task_id, task_id)
         updated_task = TemplateTask.objects.get(pk=updated_task_id)
         self.assertEqual(updated_task.task_name, "Updated Task")
 
@@ -71,17 +82,8 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(delete_response.status_code, status.HTTP_200_OK)
-        self.assertIn("new_template_version", delete_response.data)
-        # The delete itself forks yet another version, the task that
-        # actually disappears is this newest version's own copy, not
-        # updated_task_id, which now belongs to the version just before
-        # it and stays exactly as it was, same as every other fork.
-        newest_template_id = delete_response.data["new_template_version"]["template_id"]
-        self.assertEqual(
-            TemplateTask.objects.filter(template_id=newest_template_id).count(), 0
-        )
-        self.assertTrue(TemplateTask.objects.filter(pk=updated_task_id).exists())
-        self.assertTrue(TemplateTask.objects.filter(pk=task_id).exists())
+        self.assertNotIn("new_template_version", delete_response.data)
+        self.assertFalse(TemplateTask.objects.filter(pk=updated_task_id).exists())
 
     def test_activity_workflow_create_update_delete(self):
         create_response = self.client.post(
@@ -97,6 +99,7 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("new_template_version", create_response.data)
 
         activity_id = create_response.data["template_activity_id"]
         self.assertTrue(TemplateActivity.objects.filter(pk=activity_id).exists())
@@ -110,13 +113,12 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
-        self.assertIn("new_template_version", update_response.data)
-
-        original_activity = TemplateActivity.objects.get(pk=activity_id)
-        self.assertEqual(original_activity.activity_name, "Initial Activity")
+        # Same reasoning as the task workflow above: this fresh version
+        # has never been used by a cycle yet, so it's edited in place.
+        self.assertNotIn("new_template_version", update_response.data)
 
         updated_activity_id = update_response.data["template_activity_id"]
-        self.assertNotEqual(updated_activity_id, activity_id)
+        self.assertEqual(updated_activity_id, activity_id)
         updated_activity = TemplateActivity.objects.get(pk=updated_activity_id)
         self.assertEqual(updated_activity.activity_name, "Updated Activity")
 
@@ -125,10 +127,5 @@ class TaskActivityWorkflowTests(APITestCase):
         )
 
         self.assertEqual(delete_response.status_code, status.HTTP_200_OK)
-        self.assertIn("new_template_version", delete_response.data)
-        newest_template_id = delete_response.data["new_template_version"]["template_id"]
-        self.assertEqual(
-            TemplateActivity.objects.filter(template_id=newest_template_id).count(), 0
-        )
-        self.assertTrue(TemplateActivity.objects.filter(pk=updated_activity_id).exists())
-        self.assertTrue(TemplateActivity.objects.filter(pk=activity_id).exists())
+        self.assertNotIn("new_template_version", delete_response.data)
+        self.assertFalse(TemplateActivity.objects.filter(pk=updated_activity_id).exists())

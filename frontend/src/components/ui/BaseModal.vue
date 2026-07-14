@@ -17,6 +17,7 @@ const props = defineProps({
   },
   closable: { type: Boolean, default: true },
   confirmLabel: { type: String, default: 'Confirm' },
+  confirmDisabled: { type: Boolean, default: false },
   cancelLabel: { type: String, default: 'Cancel' },
   confirmVariant: { type: String, default: 'primary' },
   loading: { type: Boolean, default: false },
@@ -70,7 +71,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           <div v-if="$slots.footer || confirmLabel" class="modal-footer">
             <slot name="footer">
               <BaseButton variant="secondary" @click="cancel">{{ cancelLabel }}</BaseButton>
-              <BaseButton :variant="confirmVariant" :loading="loading" @click="confirm">{{ confirmLabel }}</BaseButton>
+              <BaseButton :variant="confirmVariant" :loading="loading" :disabled="confirmDisabled" @click="confirm">{{ confirmLabel }}</BaseButton>
             </slot>
           </div>
 
