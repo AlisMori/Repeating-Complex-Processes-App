@@ -1,8 +1,13 @@
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
 
+from .auth_sessions import (
+    build_token_payload,
+    serialize_session_window,
+    touch_authenticated_session,
+)
 from .serializers import (
     LoginSerializer,
     LoginUserSerializer,
@@ -10,16 +15,9 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    SlidingTokenRefreshSerializer,
     UserSerializer,
 )
-
-
-def build_token_payload(user):
-    refresh = RefreshToken.for_user(user)
-    return {
-        "access": str(refresh.access_token),
-        "refresh": str(refresh),
-    }
 
 
 class RegisterView(APIView):
@@ -35,7 +33,7 @@ class RegisterView(APIView):
                 {
                     "message": "Account created successfully.",
                     "user": UserSerializer(user).data,
-                    "tokens": build_token_payload(user),
+                    **build_token_payload(user),
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -67,7 +65,7 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        serializer = LogoutSerializer(data=request.data)
+        serializer = LogoutSerializer(data=request.data, context={"request": request})
 
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -100,6 +98,25 @@ class MeView(APIView):
 
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ActivityView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session = touch_authenticated_session(request)
+        return Response(
+            {
+                "detail": "Activity recorded.",
+                "code": "activity_recorded",
+                **serialize_session_window(session),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SlidingTokenRefreshView(TokenRefreshView):
+    serializer_class = SlidingTokenRefreshSerializer
 
 
 class PasswordResetView(APIView):

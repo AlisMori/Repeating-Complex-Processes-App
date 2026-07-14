@@ -29,7 +29,7 @@ function closeUserMenu() {
 }
 
 async function logout() {
-  authStore.clearSession()
+  await authStore.logoutCurrentSession()
   router.push({ name: 'login' })
 }
 

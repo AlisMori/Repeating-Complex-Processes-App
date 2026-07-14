@@ -60,6 +60,8 @@ async function submit() {
       access: data.access || '',
       refresh: data.refresh || '',
       user: data.user || null,
+      lastActivityAt: data.last_activity_at || null,
+      inactivityExpiresAt: data.inactivity_expires_at || null,
     })
     onboardingStore.maybeAutoStart('sidebar')
     router.push({ name: 'dashboard' })
