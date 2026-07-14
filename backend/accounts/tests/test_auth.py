@@ -6,10 +6,13 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
+
+from accounts.models import AuthSession
 
 
 User = get_user_model()
@@ -27,6 +30,15 @@ class AuthApiTests(APITestCase):
             email="alice@example.com",
             password="StrongPass123!",
         )
+
+    def login_and_get_tokens(self):
+        response = self.client.post(
+            reverse("auth-login"),
+            {"username": "alice", "password": "StrongPass123!"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response
 
     def test_register_creates_user_with_hashed_password(self):
         response = self.client.post(
@@ -78,16 +90,20 @@ class AuthApiTests(APITestCase):
         self.assertIn("email", response.data)
 
     def test_login_returns_jwt_tokens(self):
-        response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        response = self.login_and_get_tokens()
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
         self.assertIn("refresh", response.data)
         self.assertEqual(response.data["user"]["username"], "alice")
+
+    def test_login_creates_authenticated_session(self):
+        response = self.login_and_get_tokens()
+
+        self.assertIn("last_activity_at", response.data)
+        self.assertIn("inactivity_expires_at", response.data)
+        session = AuthSession.objects.get(user=self.user)
+        self.assertIsNone(session.revoked_at)
+        self.assertEqual(AuthSession.objects.count(), 1)
 
     def test_login_rejects_invalid_password_with_generic_error(self):
         response = self.client.post(
@@ -171,11 +187,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_me_accepts_bearer_token(self):
-        login_response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        login_response = self.login_and_get_tokens()
         access_token = login_response.data["access"]
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
@@ -194,11 +206,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_logout_blacklists_refresh_token(self):
-        login_response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        login_response = self.login_and_get_tokens()
         access_token = login_response.data["access"]
         refresh_token = login_response.data["refresh"]
 
@@ -210,6 +218,7 @@ class AuthApiTests(APITestCase):
         )
 
         self.assertEqual(logout_response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(AuthSession.objects.get(user=self.user).revoked_at)
 
         refresh_response = self.client.post(
             reverse("auth-token-refresh"),
@@ -219,11 +228,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_logout_requires_authenticated_user(self):
-        login_response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        login_response = self.login_and_get_tokens()
 
         response = self.client.post(
             reverse("auth-logout"),
@@ -234,11 +239,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_logout_returns_400_when_refresh_token_is_missing(self):
-        login_response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        login_response = self.login_and_get_tokens()
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
         )
@@ -249,11 +250,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(response.data["refresh"], ["This field is required."])
 
     def test_logout_returns_400_when_refresh_token_is_invalid(self):
-        login_response = self.client.post(
-            reverse("auth-login"),
-            {"username": "alice", "password": "StrongPass123!"},
-            format="json",
-        )
+        login_response = self.login_and_get_tokens()
         self.client.credentials(
             HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}"
         )
@@ -309,6 +306,133 @@ class AuthApiTests(APITestCase):
         self.assertEqual(reset_response.status_code, status.HTTP_200_OK)
         self.assertEqual(login_response.status_code, status.HTTP_200_OK)
         self.assertIn("access", login_response.data)
+
+    def test_access_token_can_expire_while_session_remains_active(self):
+        login_response = self.login_and_get_tokens()
+        expired_access = AccessToken(login_response.data["access"])
+        expired_access.set_exp(lifetime=timedelta(seconds=-1))
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {expired_access}")
+        me_response = self.client.get(reverse("auth-me"))
+
+        self.assertEqual(me_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", refresh_response.data)
+        self.assertIsNone(AuthSession.objects.get(user=self.user).revoked_at)
+
+    def test_refresh_succeeds_while_session_is_active(self):
+        login_response = self.login_and_get_tokens()
+        session = AuthSession.objects.get(user=self.user)
+        session.last_activity_at = timezone.now() - timedelta(minutes=29)
+        session.save(update_fields=["last_activity_at"])
+
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_200_OK)
+        self.assertIn("refresh", refresh_response.data)
+        self.assertIn("inactivity_expires_at", refresh_response.data)
+
+    def test_refresh_fails_after_inactivity_timeout(self):
+        login_response = self.login_and_get_tokens()
+        session = AuthSession.objects.get(user=self.user)
+        session.last_activity_at = timezone.now() - timedelta(minutes=31)
+        session.save(update_fields=["last_activity_at"])
+
+        refresh_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(refresh_response.data["code"], "session_inactive")
+        self.assertEqual(
+            refresh_response.data["detail"],
+            "Your session expired after 30 minutes of inactivity.",
+        )
+
+    def test_activity_endpoint_updates_last_activity(self):
+        login_response = self.login_and_get_tokens()
+        session = AuthSession.objects.get(user=self.user)
+        earlier = timezone.now() - timedelta(minutes=10)
+        session.last_activity_at = earlier
+        session.save(update_fields=["last_activity_at"])
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+        response = self.client.post(reverse("auth-activity"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        session.refresh_from_db()
+        self.assertGreater(session.last_activity_at, earlier)
+        self.assertEqual(response.data["code"], "activity_recorded")
+
+    def test_anonymous_user_cannot_update_activity(self):
+        response = self.client.post(reverse("auth-activity"), {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_activity_endpoint_ignores_client_supplied_timestamp(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-activity"),
+            {"last_activity_at": "1999-01-01T00:00:00Z"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotEqual(response.data["last_activity_at"], "1999-01-01T00:00:00Z")
+
+    def test_rotated_refresh_token_cannot_be_reused(self):
+        login_response = self.login_and_get_tokens()
+        first_refresh = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        second_refresh = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(first_refresh.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_refresh.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_multiple_refresh_attempts_keep_session_state_consistent(self):
+        login_response = self.login_and_get_tokens()
+        response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        session = AuthSession.objects.get(user=self.user)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(AuthSession.objects.count(), 1)
+        self.assertNotEqual(session.current_refresh_jti, "")
+
+        replay_response = self.client.post(
+            reverse("auth-token-refresh"),
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+        session.refresh_from_db()
+
+        self.assertEqual(replay_response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(AuthSession.objects.count(), 1)
 
     def test_password_reset_confirm_rejects_old_password_after_change(self):
         uid = urlsafe_base64_encode(str(self.user.pk).encode())
@@ -485,4 +609,3 @@ class AuthApiTests(APITestCase):
         self.assertTrue(
             default_token_generator.check_token(self.user, token_match.group(1))
         )
-

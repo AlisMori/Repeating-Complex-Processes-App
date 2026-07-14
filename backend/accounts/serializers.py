@@ -3,14 +3,23 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .auth_sessions import (
+    SessionInactive,
+    get_inactivity_expiry,
+    serialize_session_window,
+)
 from .forms import SafeMessageIdPasswordResetForm
+from .models import AuthSession
 
 
 User = get_user_model()
@@ -161,8 +170,66 @@ class LogoutSerializer(serializers.Serializer):
 
     def save(self):
         try:
-            RefreshToken(self.validated_data["refresh"]).blacklist()
+            refresh = RefreshToken(self.validated_data["refresh"])
+            request = self.context.get("request")
+            if request is not None and str(refresh.get("user_id")) != str(request.user.id):
+                raise TokenError("refresh token user mismatch")
+
+            session_id = refresh.get("sid")
+            if session_id and request is not None:
+                AuthSession.objects.filter(
+                    session_id=session_id,
+                    user=request.user,
+                    revoked_at__isnull=True,
+                ).update(revoked_at=timezone.now())
+
+            refresh.blacklist()
         except TokenError:
             raise serializers.ValidationError(
                 {"refresh": [self.error_messages["invalid_refresh"]]}
             )
+
+
+class SlidingTokenRefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs):
+        refresh = RefreshToken(attrs["refresh"])
+        session_id = refresh.get("sid")
+        refresh_jti = refresh.get("jti")
+
+        if not session_id or not refresh_jti:
+            raise AuthenticationFailed("Invalid refresh token.")
+
+        with transaction.atomic():
+            try:
+                session = AuthSession.objects.select_for_update().get(
+                    session_id=session_id,
+                    user_id=refresh["user_id"],
+                )
+            except AuthSession.DoesNotExist as exc:
+                raise AuthenticationFailed("Invalid refresh token.") from exc
+
+            if session.revoked_at is not None:
+                raise AuthenticationFailed("Invalid refresh token.")
+
+            if session.current_refresh_jti != refresh_jti:
+                raise AuthenticationFailed("Invalid refresh token.")
+
+            if timezone.now() > get_inactivity_expiry(session.last_activity_at):
+                session.revoked_at = timezone.now()
+                session.save(update_fields=["revoked_at"])
+                try:
+                    refresh.blacklist()
+                except TokenError:
+                    pass
+                raise SessionInactive()
+
+            data = super().validate(attrs)
+
+            rotated_refresh = data.get("refresh")
+            if rotated_refresh:
+                rotated_token = RefreshToken(rotated_refresh)
+                session.current_refresh_jti = rotated_token["jti"]
+                session.save(update_fields=["current_refresh_jti"])
+
+            data.update(serialize_session_window(session))
+            return data

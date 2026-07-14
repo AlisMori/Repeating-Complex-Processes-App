@@ -10,9 +10,13 @@ export function login(payload) {
 
 export function logout(payload, accessToken) {
   return api.post('/auth/logout/', payload, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+    headers: accessToken
+      ? {
+          Authorization: `Bearer ${accessToken}`,
+        }
+      : undefined,
+    requiresAuth: true,
+    skipActivityTracking: true,
   })
 }
 
@@ -33,4 +37,15 @@ export function fetchMe(accessToken) {
       : undefined,
     requiresAuth: true,
   })
+}
+
+export function reportActivity() {
+  return api.post(
+    '/auth/activity/',
+    {},
+    {
+      requiresAuth: true,
+      skipActivityTracking: true,
+    },
+  )
 }

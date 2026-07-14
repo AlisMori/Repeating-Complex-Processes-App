@@ -77,8 +77,8 @@ function saveNotifications() {
   setTimeout(() => notifSaved.value = false, 3000)
 }
 
-function logout() {
-  authStore.clearSession()
+async function logout() {
+  await authStore.logoutCurrentSession()
   router.push({ name: 'login' })
 }
 

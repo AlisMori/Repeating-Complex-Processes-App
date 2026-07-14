@@ -1,8 +1,11 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
+import { logout as logoutRequest } from '@/api/auth'
+
 const STORAGE_KEY = 'auth-test-session'
 const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Please log in again.'
+const SESSION_INACTIVE_MESSAGE = 'Your session expired after 30 minutes of inactivity. Please log in again.'
 
 function readStoredSession() {
   try {
@@ -11,12 +14,16 @@ function readStoredSession() {
       access: parsed?.access || '',
       refresh: parsed?.refresh || '',
       user: parsed?.user || null,
+      lastActivityAt: parsed?.lastActivityAt || null,
+      inactivityExpiresAt: parsed?.inactivityExpiresAt || null,
     }
   } catch {
     return {
       access: '',
       refresh: '',
       user: null,
+      lastActivityAt: null,
+      inactivityExpiresAt: null,
     }
   }
 }
@@ -38,8 +45,10 @@ export const useAuthStore = defineStore('auth', () => {
   const refreshToken = ref(initialSession.refresh)
   const user = ref(initialSession.user)
   const authMessage = ref('')
+  const lastActivityAt = ref(initialSession.lastActivityAt)
+  const inactivityExpiresAt = ref(initialSession.inactivityExpiresAt)
 
-  const isAuthenticated = computed(() => Boolean(accessToken.value) && !isAccessTokenExpired())
+  const isAuthenticated = computed(() => Boolean(user.value) && Boolean(refreshToken.value || accessToken.value))
 
   function persist() {
     if (!accessToken.value && !refreshToken.value && !user.value) {
@@ -47,21 +56,24 @@ export const useAuthStore = defineStore('auth', () => {
       return
     }
 
-    // Temporary localStorage-based token persistence for auth flow testing only.
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
         access: accessToken.value,
         refresh: refreshToken.value,
         user: user.value,
+        lastActivityAt: lastActivityAt.value,
+        inactivityExpiresAt: inactivityExpiresAt.value,
       }),
     )
   }
 
   function setSession(session) {
-    accessToken.value = session.access || ''
-    refreshToken.value = session.refresh || ''
-    user.value = session.user || null
+    accessToken.value = session.access || accessToken.value || ''
+    refreshToken.value = session.refresh || refreshToken.value || ''
+    user.value = session.user ?? user.value
+    lastActivityAt.value = session.lastActivityAt ?? lastActivityAt.value
+    inactivityExpiresAt.value = session.inactivityExpiresAt ?? inactivityExpiresAt.value
     authMessage.value = ''
     persist()
   }
@@ -70,6 +82,8 @@ export const useAuthStore = defineStore('auth', () => {
     accessToken.value = ''
     refreshToken.value = ''
     user.value = null
+    lastActivityAt.value = null
+    inactivityExpiresAt.value = null
     persist()
   }
 
@@ -94,9 +108,41 @@ export const useAuthStore = defineStore('auth', () => {
     return Date.now() >= payload.exp * 1000
   }
 
+  function markLocalActivity() {
+    lastActivityAt.value = new Date().toISOString()
+    persist()
+  }
+
+  function setActivityWindow(payload = {}) {
+    if (payload.lastActivityAt !== undefined) {
+      lastActivityAt.value = payload.lastActivityAt
+    }
+
+    if (payload.inactivityExpiresAt !== undefined) {
+      inactivityExpiresAt.value = payload.inactivityExpiresAt
+    }
+
+    persist()
+  }
+
   function handleSessionExpired(message = SESSION_EXPIRED_MESSAGE) {
     clearSession()
     setAuthMessage(message)
+  }
+
+  async function logoutCurrentSession() {
+    const currentRefreshToken = refreshToken.value
+    const currentAccessToken = accessToken.value
+
+    try {
+      if (currentRefreshToken) {
+        await logoutRequest({ refresh: currentRefreshToken }, currentAccessToken)
+      }
+    } catch {
+      // Best-effort server logout; local cleanup still has to happen.
+    } finally {
+      clearSession()
+    }
   }
 
   return {
@@ -104,12 +150,18 @@ export const useAuthStore = defineStore('auth', () => {
     refreshToken,
     user,
     authMessage,
+    inactivityExpiresAt,
     isAuthenticated,
-    setSession,
-    clearSession,
-    setAuthMessage,
     clearAuthMessage,
-    isAccessTokenExpired,
+    clearSession,
     handleSessionExpired,
+    isAccessTokenExpired,
+    lastActivityAt,
+    logoutCurrentSession,
+    markLocalActivity,
+    setActivityWindow,
+    setAuthMessage,
+    setSession,
+    SESSION_INACTIVE_MESSAGE,
   }
 })

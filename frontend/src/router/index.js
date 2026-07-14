@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { ensureValidAccessToken } from '../api/axios'
 import DashboardView from '../views/DashboardView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
@@ -138,22 +139,25 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore(pinia)
 
   if (to.meta.requiresAuth) {
-    if (!authStore.accessToken) {
+    if (!authStore.refreshToken && !authStore.accessToken) {
       authStore.handleSessionExpired('Please log in to continue.')
       return { name: 'login' }
     }
 
     if (authStore.isAccessTokenExpired()) {
-      authStore.handleSessionExpired()
-      return { name: 'login' }
+      try {
+        await ensureValidAccessToken()
+      } catch {
+        return { name: 'login' }
+      }
     }
   }
 
-  if (to.meta.guestOnly && authStore.accessToken && !authStore.isAccessTokenExpired()) {
+  if (to.meta.guestOnly && authStore.refreshToken) {
     return { name: 'dashboard' }
   }
 

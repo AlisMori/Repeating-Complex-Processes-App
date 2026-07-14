@@ -83,13 +83,13 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    # The Design Document requires an authenticated session; a 30-minute JWT
-    # access token lifetime enforces the same backend-controlled timeout goal.
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=10),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+AUTH_SESSION_INACTIVITY_TIMEOUT = timedelta(minutes=30)
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
