@@ -21,6 +21,7 @@ import {
   getTaskTags, assignTagToTask, unassignTagFromTask,
   getActivityTags, assignTagToActivity, unassignTagFromActivity,
   getTemplateCategories, createTemplateCategory,
+  getTemplateVersions, makeCurrentVersion,
 } from '@/api/templates'
 import { getErrorMessage, isPermissionError } from '@/utils/apiErrors'
 
@@ -76,14 +77,14 @@ const newCategoryName = ref('')
 const noteModal = ref({ open: false, kind: null, item: null, text: '' })
 const noteLoading = ref(false)
 
-const templateId = computed(() => ref(route.params.id)
+const templateId = computed(() => route.params.id)
 
 
 async function loadTemplate() {
   loading.value = true
   error.value = ''
   try {
-    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes] = await Promise.all([
+    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes, versionsRes] = await Promise.all([
       getTemplate(templateId.value),
       getTemplateTasks(templateId.value),
       getTemplateActivities(templateId.value),
@@ -93,6 +94,7 @@ async function loadTemplate() {
       getTaskTags(),
       getActivityTags(),
       getTemplateCategories(templateId.value),
+      getTemplateVersions(templateId.value),
     ])
     template.value = tplRes.data
     versions.value = Array.isArray(versionsRes.data) ? versionsRes.data : (versionsRes.data.results || [])
@@ -100,9 +102,7 @@ async function loadTemplate() {
     activities.value = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
     taskTagLinks.value = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
     activityTagLinks.value = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
-    const taskTagPool = Array.isArray(taskTagPoolRes.data) ? taskTagPoolRes.data : (taskTagPoolRes.data.results || [])
-    const activityTagPool = Array.isArray(activityTagPoolRes.data) ? activityTagPoolRes.data : (activityTagPoolRes.data.results || [])
-    allTags.value = [...taskTagPool, ...activityTagPool]
+    allTags.value = Array.isArray(tagsRes.data) ? tagsRes.data : (tagsRes.data.results || [])
     // Filter deps that belong to this template's tasks
     const taskIds = new Set(tasks.value.map(t => t.template_task_id))
     const allDeps = Array.isArray(depsRes.data) ? depsRes.data : (depsRes.data.results || [])
@@ -624,11 +624,11 @@ onMounted(loadTemplate)
           <!-- LEFT -->
           <div class="col-main">
 
-            <!-- GROUPED: each activity followed by its linked tasks, then any unlinked tasks -->
-            <div class="section-card" v-if="groupedItems.length > 0">
+	  <!-- TASKS -->
+            <div class="section-card" v-if="tasks.length > 0">
               <div class="section-header">
-                <div class="section-title">Tasks & Activities</div>
-                <span class="section-count">{{ tasks.length + activities.length }}</span>
+                <div class="section-title">Tasks</div>
+                <span class="section-count">{{ tasks.length }}</span>
               </div>
               <div class="task-list">
                 <div v-for="task in tasks" :key="task.template_task_id" class="task-row">
@@ -676,6 +676,9 @@ onMounted(loadTemplate)
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
             <div v-if="tasks.length === 0" class="empty-card">
               No tasks defined. Click Edit template to add tasks.
             </div>
@@ -721,13 +724,11 @@ onMounted(loadTemplate)
                       </button>
                     </div>
                   </div>
-
-                </template>
+                </div>
               </div>
             </div>
-
-            <div v-if="groupedItems.length === 0" class="empty-card">
-              No tasks or activities defined. Click Edit template to add some.
+            <div v-if="activities.length === 0" class="empty-card">
+              No activities defined.
             </div>
 
             <!-- TAG MANAGEMENT -->

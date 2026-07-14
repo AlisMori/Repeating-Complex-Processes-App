@@ -803,7 +803,6 @@ onMounted(loadCycle)
                     </div>
                     <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -861,68 +860,6 @@ onMounted(loadCycle)
                 </div>
               </div>
             </div>
-
-                <div class="tc-row">
-                  <div class="tc-left">
-                    <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
-                    <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
-                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
-                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
-                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
-                  </div>
-                  <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-<<<<<<< HEAD
-                    <div class="status-actions">
-                      <button
-                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
-                        :key="opt.value"
-                        class="status-pill"
-                        :class="statusClass(opt.value)"
-                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
-                      >{{ opt.label }}</button>
-                    </div>
-=======
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="inProgressTasks.length > 0">
-              <div class="timeline-label">In Progress</div>
-              <div v-for="task in inProgressTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
-                <div class="tc-row">
-                  <div class="tc-left">
-                    <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
-                    <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
-                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
-                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
-                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
-                  </div>
-		  <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
->>>>>>> origin/main
-                  </div>
-                </div>
-              </div>
-            </div>
-
             <div v-if="completedTasks.length > 0">
               <div class="timeline-label">Completed</div>
               <div v-for="task in completedTasks" :key="task.cycle_task_id" class="task-card completed-card" @click="openTaskDetail(task)">
@@ -1285,8 +1222,8 @@ onMounted(loadCycle)
 
 .status-pill.status-pending { border-color: #CBD5E1; }
 .status-pill.status-in-progress { border-color: #F4B740; }
-.status-pill.status-completed { border-color: #22C55E; }
-.status-pill.status-skipped { border-color: #94A3B8; }
+.status-pill.status-completed { background: #DCFCE7; border-color: #22C55E; color: #166534; }
+.status-pill.status-skipped { background: #FFFFFF; border-color: #94A3B8; color: #475569; }
 .status-pill.status-overdue { border-color: #FECACA; }
 .status-pill.pill-delay { background: #FFE7D8; color: #C2410C; border-color: #F97316; }
 
