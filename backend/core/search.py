@@ -19,7 +19,7 @@ SCOPE_LABELS = {
     "notes": "Notes",
 }
 DEFAULT_SCOPES_BY_CONTEXT = {
-    "dashboard": ["cycles", "tasks", "activities"],
+    "dashboard": list(VALID_SCOPES),
     "cycles": ["cycles", "tasks", "activities", "notes"],
     "templates": ["templates", "tasks", "activities", "notes"],
     "global": list(VALID_SCOPES),

@@ -213,9 +213,12 @@ class SmartSearchApiTests(APITestCase):
         response = self.client.get(self.url, {"q": "exam", "context": "dashboard"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["scopes"], ["cycles", "tasks", "activities"])
+        self.assertEqual(
+            response.data["scopes"],
+            ["templates", "cycles", "tasks", "activities", "notes"],
+        )
         group_types = [group["type"] for group in response.data["groups"]]
-        self.assertEqual(set(group_types), {"cycles", "tasks", "activities"})
+        self.assertEqual(set(group_types), {"templates", "cycles", "tasks", "activities", "notes"})
 
     def test_all_scope_shortcut_expands_to_all_valid_scopes(self):
         response = self.client.get(self.url, {"q": "exam", "context": "global", "scopes": "all"})

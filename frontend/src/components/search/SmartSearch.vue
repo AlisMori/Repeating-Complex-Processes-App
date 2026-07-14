@@ -39,16 +39,26 @@ const scopeOptions = [
 
 const minQueryLength = 2
 
+const normalizedDefaultScopes = computed(() => {
+  const requested = Array.isArray(props.defaultScopes) ? props.defaultScopes : []
+  return scopeOptions
+    .map((option) => option.value)
+    .filter((value) => requested.includes(value))
+})
+
 const effectiveScopes = computed(() => {
   if (selectedScopes.value.includes('all')) {
     return ['all']
   }
-  return selectedScopes.value
+  if (selectedScopes.value.length > 0) {
+    return selectedScopes.value
+  }
+  return normalizedDefaultScopes.value
 })
 
 const defaultScopeLabels = computed(() =>
   scopeOptions
-    .filter((option) => props.defaultScopes.includes(option.value))
+    .filter((option) => normalizedDefaultScopes.value.includes(option.value))
     .map((option) => option.label)
     .join(', ')
 )
@@ -74,12 +84,18 @@ function clearResults() {
 }
 
 function isScopeVisuallyActive(scope) {
-  if (scope === 'all') {
-    return selectedScopes.value.includes('all')
+  if (selectedScopes.value.length === 0) {
+    if (scope === 'all') {
+      return normalizedDefaultScopes.value.includes('all')
+    }
+    if (normalizedDefaultScopes.value.includes('all')) {
+      return false
+    }
+    return normalizedDefaultScopes.value.includes(scope)
   }
 
-  if (selectedScopes.value.length === 0) {
-    return props.defaultScopes.includes(scope)
+  if (scope === 'all') {
+    return selectedScopes.value.includes('all')
   }
 
   return selectedScopes.value.includes(scope)
@@ -91,19 +107,11 @@ function toggleScope(scope) {
     return
   }
 
-  const next = selectedScopes.value.filter((value) => value !== 'all')
+  const next = (selectedScopes.value.length === 0
+    ? normalizedDefaultScopes.value
+    : selectedScopes.value
+  ).filter((value) => value !== 'all')
   const index = next.indexOf(scope)
-
-  if (selectedScopes.value.length === 0) {
-    const defaultSet = new Set(props.defaultScopes)
-    if (defaultSet.has(scope)) {
-      defaultSet.delete(scope)
-    } else {
-      defaultSet.add(scope)
-    }
-    selectedScopes.value = Array.from(defaultSet)
-    return
-  }
 
   if (index >= 0) {
     next.splice(index, 1)

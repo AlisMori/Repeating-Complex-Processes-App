@@ -265,7 +265,7 @@ onMounted(async () => {
       <div class="topbar-actions">
         <SmartSearch
           context="dashboard"
-          :default-scopes="['cycles', 'tasks', 'activities']"
+          :default-scopes="['all']"
           placeholder="Search dashboard items..."
         />
         <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('dashboard')">
