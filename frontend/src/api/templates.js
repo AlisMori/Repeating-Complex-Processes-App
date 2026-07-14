@@ -33,8 +33,11 @@ import api from './axios'
  * Get all templates accessible to the current user.
  * @param {string} [search] - optional search query
  */
-export function getTemplates(search = '') {
-  return api.get('/templates/', { params: search ? { search } : {}, requiresAuth: true })
+export function getTemplates(search = '', { allVersions = false } = {}) {
+  const params = {}
+  if (search) params.search = search
+  if (allVersions) params.all_versions = 'true'
+  return api.get('/templates/', { params })
 }
 
 /**
@@ -167,6 +170,17 @@ export function createCycleFromTemplate(templateId, data) {
 export function getTemplateTasks(templateId) {
   return api.get('/template-tasks/', { params: { template: templateId }, requiresAuth: true })
 }
+
+/**
+ * Mark this specific version as the current one for its template
+ * family. Other versions still exist afterward — this only changes
+ * which one is treated as current.
+ * @param {number|string} id
+ */
+export function makeCurrentVersion(id) {
+  return api.post(`/templates/${id}/make_current/`)
+}
+
 
 /**
  * Get a single template task by ID — used to show the original

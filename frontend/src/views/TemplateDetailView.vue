@@ -1,7 +1,7 @@
 <!-- /frontend/src/views/TemplateDetailView.vue -->
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -21,6 +21,7 @@ import {
   getTaskTags, assignTagToTask, unassignTagFromTask,
   getActivityTags, assignTagToActivity, unassignTagFromActivity,
   getTemplateCategories, createTemplateCategory,
+  getTemplateVersions, makeCurrentVersion,
 } from '@/api/templates'
 import { getErrorMessage, isPermissionError } from '@/utils/apiErrors'
 
@@ -36,7 +37,13 @@ const timeline = ref(null)
 const loading = ref(true)
 const error = ref('')
 const deleteModalOpen = ref(false)
+const taskTagLinks = ref([])
+const activityTagLinks = ref([])
+const allTags = ref([])
+const detailModal = ref({ open: false, type: null, item: null })
 const deleteLoading = ref(false)
+const versions = ref([])
+const makeCurrentLoading = ref(false)
 
 // Tags
 const tags = ref([])
@@ -70,13 +77,14 @@ const newCategoryName = ref('')
 const noteModal = ref({ open: false, kind: null, item: null, text: '' })
 const noteLoading = ref(false)
 
-const templateId = ref(route.params.id)
+const templateId = computed(() => route.params.id)
+
 
 async function loadTemplate() {
   loading.value = true
   error.value = ''
   try {
-    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes] = await Promise.all([
+    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes, versionsRes] = await Promise.all([
       getTemplate(templateId.value),
       getTemplateTasks(templateId.value),
       getTemplateActivities(templateId.value),
@@ -85,11 +93,16 @@ async function loadTemplate() {
       getTags(),
       getTaskTags(),
       getActivityTags(),
-      getTemplateCategories(),
+      getTemplateCategories(templateId.value),
+      getTemplateVersions(templateId.value),
     ])
     template.value = tplRes.data
+    versions.value = Array.isArray(versionsRes.data) ? versionsRes.data : (versionsRes.data.results || [])
     tasks.value = Array.isArray(tasksRes.data) ? tasksRes.data : (tasksRes.data.results || [])
     activities.value = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
+    taskTagLinks.value = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
+    activityTagLinks.value = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
+    allTags.value = Array.isArray(tagsRes.data) ? tagsRes.data : (tagsRes.data.results || [])
     // Filter deps that belong to this template's tasks
     const taskIds = new Set(tasks.value.map(t => t.template_task_id))
     const allDeps = Array.isArray(depsRes.data) ? depsRes.data : (depsRes.data.results || [])
@@ -124,6 +137,67 @@ function formatReminders(val) {
     return val.map(d => d === 0 ? 'On the day' : `${d} days before`).join(', ')
   }
   return val === 0 ? 'On the day' : `${val} days before`
+}
+
+function tagNamesForTask(taskId) {
+  const tagIds = taskTagLinks.value.filter(l => l.template_task === taskId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+function tagNamesForActivity(activityId) {
+  const tagIds = activityTagLinks.value.filter(l => l.template_activity === activityId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+// One ordered list — each activity immediately followed by the tasks
+// linked to it (grouped by relationship, not by type), then any
+// tasks with no linked activity at the end. Mirrors exactly how
+// GanttChart.vue groups the same data on the right.
+const groupedItems = computed(() => {
+  const result = []
+  const linkedTaskIds = new Set()
+
+  for (const act of activities.value) {
+    result.push({ type: 'activity', item: act })
+    const linkedTasks = tasks.value
+      .filter(t => t.template_activity === act.template_activity_id)
+      .sort((a, b) => a.day_offset - b.day_offset)
+    for (const t of linkedTasks) {
+      result.push({ type: 'task', item: t, linked: true })
+      linkedTaskIds.add(t.template_task_id)
+    }
+  }
+
+  const unlinkedTasks = tasks.value
+    .filter(t => !linkedTaskIds.has(t.template_task_id))
+    .sort((a, b) => a.day_offset - b.day_offset)
+  for (const t of unlinkedTasks) {
+    result.push({ type: 'task', item: t, linked: false })
+  }
+
+  return result
+})
+
+function openDetail(type, item) {
+  detailModal.value = { open: true, type, item }
+}
+
+function onSwitchVersion(newId) {
+  if (String(newId) === String(templateId.value)) return
+  router.push({ name: 'template-detail', params: { id: newId } })
+}
+
+async function onMakeCurrent() {
+  makeCurrentLoading.value = true
+  try {
+    await makeCurrentVersion(templateId.value)
+    toast.success('This version is now current.')
+    await loadTemplate()
+  } catch {
+    toast.error('Failed to update the current version.')
+  } finally {
+    makeCurrentLoading.value = false
+  }
 }
 
 async function onDuplicate() {
@@ -417,6 +491,7 @@ const ganttData = computed(() => {
     isMandatory: b.is_mandatory,
     isFixed: b.is_fixed_date,
     depName: b.dep_name,
+    activityId: b.template_activity_id,
   }))
   // Resolve each bar's dependsOnIndex AFTER sorting — the index has
   // to point at the prerequisite's position in THIS final order, not
@@ -428,6 +503,7 @@ const ganttData = computed(() => {
   return {
     taskBars,
     activityBars: timeline.value.activity_bars.map(b => ({
+      id: b.template_activity_id,
       name: b.name,
       start: b.start,
       end: b.end,
@@ -435,6 +511,7 @@ const ganttData = computed(() => {
     maxDay: timeline.value.max_day,
   }
 })
+watch(() => route.params.id, loadTemplate)
 
 onMounted(loadTemplate)
 </script>
@@ -478,6 +555,23 @@ onMounted(loadTemplate)
             <div class="meta-pills">
               <span class="meta-pill pill-version">v{{ template.template_version }}</span>
               <span v-if="template.is_current_version" class="meta-pill pill-current">Current version</span>
+              <BaseSelect
+                v-if="versions.length > 1"
+                class="version-select"
+                :model-value="templateId"
+                @update:model-value="onSwitchVersion"
+              >
+                <option v-for="v in versions" :key="v.template_id" :value="v.template_id">
+                  v{{ v.template_version }}{{ v.is_current_version ? ' (current)' : '' }}
+                </option>
+              </BaseSelect>
+              <BaseButton
+                v-if="!template.is_current_version"
+                variant="secondary"
+                size="sm"
+                :loading="makeCurrentLoading"
+                @click="onMakeCurrent"
+              >Make current</BaseButton>
             </div>
           </div>
 
@@ -530,7 +624,7 @@ onMounted(loadTemplate)
           <!-- LEFT -->
           <div class="col-main">
 
-            <!-- TASKS -->
+	  <!-- TASKS -->
             <div class="section-card" v-if="tasks.length > 0">
               <div class="section-header">
                 <div class="section-title">Tasks</div>
@@ -585,7 +679,6 @@ onMounted(loadTemplate)
                 </div>
               </div>
             </div>
-
             <div v-if="tasks.length === 0" class="empty-card">
               No tasks defined. Click Edit template to add tasks.
             </div>
@@ -634,8 +727,7 @@ onMounted(loadTemplate)
                 </div>
               </div>
             </div>
-
-            <div v-if="activities.length === 0 && tasks.length > 0" class="empty-card">
+            <div v-if="activities.length === 0" class="empty-card">
               No activities defined.
             </div>
 
@@ -753,6 +845,71 @@ onMounted(loadTemplate)
       <p class="modal-hint">Leaving this empty and saving removes the note. Notes never create a new template version.</p>
     </BaseModal>
 
+    <!-- TASK / ACTIVITY DETAIL MODAL -->
+    <BaseModal
+      v-model="detailModal.open"
+      :title="detailModal.type === 'task' ? detailModal.item?.task_name : detailModal.item?.activity_name"
+    >
+      <div v-if="detailModal.item" class="detail-view">
+
+        <template v-if="detailModal.type === 'task'">
+          <div class="detail-row"><span class="detail-label">Day offset</span><span class="detail-value">Day {{ detailModal.item.day_offset }}</span></div>
+          <div class="detail-row"><span class="detail-label">Duration</span><span class="detail-value">{{ detailModal.item.duration_days || 1 }} day{{ detailModal.item.duration_days > 1 ? 's' : '' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Mandatory</span><span class="detail-value">{{ detailModal.item.is_mandatory ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Fixed date</span><span class="detail-value">{{ detailModal.item.is_fixed_date ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Reminders</span><span class="detail-value">{{ formatReminders(detailModal.item.reminder_lead_days) }}</span></div>
+          <div v-if="activities.find(a => a.template_activity_id === detailModal.item.template_activity)" class="detail-row">
+            <span class="detail-label">Linked activity</span>
+            <span class="detail-value">{{ activities.find(a => a.template_activity_id === detailModal.item.template_activity).activity_name }}</span>
+          </div>
+          <div v-if="dependencies.find(d => d.task === detailModal.item.template_task_id)" class="detail-row">
+            <span class="detail-label">Depends on</span>
+            <span class="detail-value">{{ getDependencyName(dependencies.find(d => d.task === detailModal.item.template_task_id).depends_on_task) }}</span>
+          </div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForTask(detailModal.item.template_task_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForTask(detailModal.item.template_task_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="detail-row"><span class="detail-label">Start day</span><span class="detail-value">Day {{ detailModal.item.start_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">End day</span><span class="detail-value">Day {{ detailModal.item.end_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">Spans</span><span class="detail-value">{{ detailModal.item.end_offset_days - detailModal.item.start_offset_days }} days</span></div>
+          <div class="detail-row"><span class="detail-label">Linked tasks</span><span class="detail-value">{{ tasks.filter(t => t.template_activity === detailModal.item.template_activity_id).length }}</span></div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForActivity(detailModal.item.template_activity_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForActivity(detailModal.item.template_activity_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+      </div>
+
+      <template #footer>
+        <BaseButton variant="secondary" @click="detailModal.open = false">Close</BaseButton>
+      </template>
+    </BaseModal>
+
   </AppLayout>
 </template>
 
@@ -781,6 +938,8 @@ onMounted(loadTemplate)
 .template-title { font-size: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; margin-bottom: 4px; }
 .template-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; }
 .meta-pills { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.version-select { width: 150px; }
+.version-select :deep(.base-select) { height: 30px; padding: 0 26px 0 10px; font-size: var(--font-hint); }
 .meta-pill { font-size: var(--font-upper); font-weight: 500; padding: 4px 12px; border-radius: 20px; }
 .pill-version { background: var(--violet-bg); color: var(--violet); }
 .pill-current { background: var(--success-bg); color: #15803D; }
@@ -809,8 +968,10 @@ onMounted(loadTemplate)
 .section-count { font-size: var(--font-upper); font-weight: 600; background: var(--violet-bg); color: var(--violet); padding: 2px 10px; border-radius: 20px; }
 
 .task-list { display: flex; flex-direction: column; }
-.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); }
+.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); cursor: pointer; transition: background var(--transition-fast); }
 .task-row:last-child { border-bottom: none; }
+.task-row:hover { background: var(--bg-page); }
+.task-row-linked { padding-left: 44px; }
 .task-row-left { display: flex; gap: 14px; align-items: flex-start; width: 100%; }
 
 .task-day-badge { font-size: var(--font-upper); font-weight: 600; color: var(--violet); background: var(--violet-bg); padding: 4px 10px; border-radius: 6px; flex-shrink: 0; white-space: nowrap; }
@@ -827,6 +988,7 @@ onMounted(loadTemplate)
 .chip-fixed { background: #FEF3C7; color: #92400E; }
 
 .empty-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 28px 20px; font-size: var(--font-label); color: var(--text-muted); text-align: center; }
+
 
 /* ROW DELETE BUTTON */
 .row-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
