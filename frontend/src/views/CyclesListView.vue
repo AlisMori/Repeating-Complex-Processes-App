@@ -9,8 +9,8 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore } from '@/stores/toast'
-import { getCycles } from '@/api/cycles'
-import api from '@/api/axios'
+import { getCycles, shutdownCycle } from '@/api/cycles'
+import { getErrorMessage } from '@/utils/apiErrors'
 
 const router = useRouter()
 const onboardingStore = useOnboardingStore()
@@ -29,8 +29,8 @@ async function loadCycles() {
   try {
     const { data } = await getCycles()
     cycles.value = Array.isArray(data) ? data : (data.results || [])
-  } catch {
-    error.value = 'Failed to load cycles.'
+  } catch (e) {
+    error.value = getErrorMessage(e, 'Failed to load cycles.')
   } finally {
     loading.value = false
   }
@@ -69,12 +69,12 @@ function openShutdownModal(cycleId) {
 async function confirmShutdownCycle() {
   shutdownLoading.value = true
   try {
-    await api.post(`/cycles/${shutdownModal.value.cycleId}/shut_down/`)
+    await shutdownCycle(shutdownModal.value.cycleId)
     shutdownModal.value.open = false
     await loadCycles()
     toast.success('Cycle shut down.')
-  } catch {
-    toast.error('Failed to shut down cycle.')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to shut down cycle.'))
   } finally {
     shutdownLoading.value = false
   }

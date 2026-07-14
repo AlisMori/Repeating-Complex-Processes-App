@@ -115,8 +115,13 @@ class DependencyRecalculationEngineTests(APITestCase):
     # -- Cascade shift ---------------------------------------------------
 
     def test_cascade_shift_propagates_through_the_chain(self):
+        # This setUp's task A has two dependents: B (movable) and D
+        # (fixed) — override_fixed is required so the fixed sibling
+        # doesn't block the whole cascade; see the dedicated tests
+        # below for the without-override rejection and the
+        # fixed-task-moves-too behavior on their own.
         url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
-        response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade", "override_fixed": True})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         self.cycle_task_a.refresh_from_db()
@@ -127,19 +132,58 @@ class DependencyRecalculationEngineTests(APITestCase):
         self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
         self.assertEqual(self.cycle_task_c.calculated_start_date, date(2026, 7, 8))
 
-    def test_cascade_shift_reports_warning_for_fixed_dependent_but_still_moves_the_rest(self):
+    def test_cascade_shift_blocked_by_fixed_dependent_is_rejected_not_silently_warned(self):
+        # D depends on A and is fixed — shifting A so D would need to
+        # move too must REJECT the whole operation, not silently
+        # leave D behind while A moves past it (that would leave A
+        # finishing AFTER the thing that's supposed to come after it,
+        # the dependency itself broken, not just "a warning").
         url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
         response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        self.assertEqual(len(response.data["warnings"]), 1)
-        self.assertEqual(response.data["warnings"][0]["task_id"], self.cycle_task_d.cycle_task_id)
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["error"], "cascade_blocked_by_fixed_task")
 
+        # Nothing moved — not A, not B, not D.
+        self.cycle_task_a.refresh_from_db()
+        self.cycle_task_b.refresh_from_db()
         self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+        self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 3))
         self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 3))
 
+    def test_cascade_shift_with_override_fixed_moves_the_fixed_dependent_too(self):
+        # Same shift, but with override_fixed — now D is allowed to
+        # move too, so the whole chain stays valid instead of either
+        # being silently broken or being blocked outright.
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade", "override_fixed": True})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["warnings"]), 1)
+        self.assertEqual(response.data["warnings"][0]["error"], "fixed_date_moved")
+        self.assertEqual(response.data["warnings"][0]["task_id"], self.cycle_task_d.cycle_task_id)
+
+        self.cycle_task_a.refresh_from_db()
         self.cycle_task_b.refresh_from_db()
+        self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 3))
         self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
+        self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 5))
+        # D is still marked as a fixed-date task — override_fixed moves
+        # its dates, it does not silently turn it into a normal task.
+        self.assertTrue(self.cycle_task_d.is_fixed_date)
+
+    def test_shift_preview_cascade_possible_is_false_when_any_branch_is_blocked(self):
+        url = reverse("cycle-tasks-shift-preview", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            response.data["cascade_possible"],
+            "cascade_possible must be False when even one downstream branch (D) is blocked, "
+            "even though the other branch (B) is perfectly movable.",
+        )
 
     # -- Fixed task editing ---------------------------------------------------
 
@@ -229,3 +273,190 @@ class DependencyRecalculationEngineTests(APITestCase):
         # D's new end is 7/5, but B still ends 7/6, so E must stay at 7/6,
         # not get pulled in to match D's later-but-still-earlier end date.
         self.assertEqual(cycle_task_e.calculated_start_date, date(2026, 7, 6))
+
+
+class DependencyBatchValidationTests(APITestCase):
+    """collect_dependency_violations and TaskDependencyViewSet.validate.
+    Covers reporting every broken rule at once instead of the user
+    fixing one and resubmitting into the next, plus the dry run
+    endpoint the frontend uses to check a dependency before creating it.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="batchuser", email="batch@test.com", password="test123"
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.template = Template.objects.create(
+            user=self.user, template_name="Batch Template", description="Testing"
+        )
+
+        # A already has two dependents (B, C), the max allowed, and ends
+        # on day 5, so anything else pointed at A hits both rules at once.
+        self.task_a = TemplateTask.objects.create(
+            template=self.template, task_name="A", day_offset=0, duration_days=5
+        )
+        self.task_b = TemplateTask.objects.create(
+            template=self.template, task_name="B", day_offset=0, duration_days=1
+        )
+        self.task_c = TemplateTask.objects.create(
+            template=self.template, task_name="C", day_offset=1, duration_days=1
+        )
+        TaskDependency.objects.create(task=self.task_b, depends_on_task=self.task_a)
+        TaskDependency.objects.create(task=self.task_c, depends_on_task=self.task_a)
+
+    def test_creating_dependency_with_two_simultaneous_violations_reports_both(self):
+        task_e = TemplateTask.objects.create(
+            template=self.template, task_name="E", day_offset=0, duration_days=1
+        )
+        url = reverse("task-dependencies-list")
+        response = self.client.post(url, {
+            "task": task_e.template_task_id,
+            "depends_on_task": self.task_a.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        errors = response.data["depends_on_task"]
+        self.assertEqual(len(errors), 2)
+        error_codes = {issue["error"] for issue in errors}
+        self.assertEqual(error_codes, {"offset_conflict", "dependent_capacity_exceeded"})
+
+        self.assertFalse(
+            TaskDependency.objects.filter(task=task_e, depends_on_task=self.task_a).exists()
+        )
+
+    def test_single_violation_still_reports_just_that_one(self):
+        task_f = TemplateTask.objects.create(
+            template=self.template, task_name="F", day_offset=0, duration_days=1
+        )
+        TaskDependency.objects.create(task=task_f, depends_on_task=self.task_b)
+        # F now has an edge that will collide with A on offset alone,
+        # fan-out capacity is not involved here (A already has B, C, but
+        # this new pair is F depending directly on B, not A).
+        url = reverse("task-dependencies-list")
+        task_g = TemplateTask.objects.create(
+            template=self.template, task_name="G", day_offset=0, duration_days=1
+        )
+        response = self.client.post(url, {
+            "task": task_g.template_task_id,
+            "depends_on_task": self.task_b.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        errors = response.data["depends_on_task"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["error"], "offset_conflict")
+
+    def test_validate_reports_valid_true_for_a_clean_pair(self):
+        task_f = TemplateTask.objects.create(
+            template=self.template, task_name="F", day_offset=5, duration_days=1
+        )
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {
+            "task": task_f.template_task_id,
+            "depends_on_task": self.task_b.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["valid"])
+        self.assertEqual(response.data["issues"], [])
+        self.assertFalse(
+            TaskDependency.objects.filter(task=task_f, depends_on_task=self.task_b).exists()
+        )
+
+    def test_validate_reports_every_issue_without_creating_anything(self):
+        task_e = TemplateTask.objects.create(
+            template=self.template, task_name="E", day_offset=0, duration_days=1
+        )
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {
+            "task": task_e.template_task_id,
+            "depends_on_task": self.task_a.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["valid"])
+        self.assertEqual(len(response.data["issues"]), 2)
+        self.assertEqual(TaskDependency.objects.filter(depends_on_task=self.task_a).count(), 2)
+
+    def test_validate_detects_circular_dependency(self):
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {
+            "task": self.task_a.template_task_id,
+            "depends_on_task": self.task_c.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["valid"])
+        error_codes = {issue["error"] for issue in response.data["issues"]}
+        self.assertIn("circular_dependency", error_codes)
+
+    def test_validate_excludes_the_edge_being_edited_from_capacity_check(self):
+        # A separate prerequisite already at the fan-out cap (M and N
+        # both depend on it). Re-validating M's own existing edge, with
+        # exclude_dependency_id set to that edge's own id, must not
+        # count M against itself, only N. Without that exclusion this
+        # would make editing any dependency impossible the moment its
+        # prerequisite is already at the cap.
+        prerequisite = TemplateTask.objects.create(
+            template=self.template, task_name="Solo prerequisite",
+            day_offset=0, duration_days=1
+        )
+        task_m = TemplateTask.objects.create(
+            template=self.template, task_name="M", day_offset=1, duration_days=1
+        )
+        task_n = TemplateTask.objects.create(
+            template=self.template, task_name="N", day_offset=1, duration_days=1
+        )
+        task_z = TemplateTask.objects.create(
+            template=self.template, task_name="Z", day_offset=1, duration_days=1
+        )
+        m_dependency = TaskDependency.objects.create(task=task_m, depends_on_task=prerequisite)
+        TaskDependency.objects.create(task=task_n, depends_on_task=prerequisite)
+
+        url = reverse("task-dependencies-validate")
+
+        # Re-validating M's own edge, excluding itself, only N remains
+        # counted, one slot still free, valid.
+        response = self.client.post(url, {
+            "task": task_m.template_task_id,
+            "depends_on_task": prerequisite.template_task_id,
+            "exclude_dependency_id": m_dependency.pk,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["valid"])
+
+        # A genuinely new third edge, no exclusion, both slots are
+        # already taken by M and N, correctly rejected.
+        response2 = self.client.post(url, {
+            "task": task_z.template_task_id,
+            "depends_on_task": prerequisite.template_task_id,
+        })
+        self.assertFalse(response2.data["valid"])
+        self.assertEqual(response2.data["issues"][0]["error"], "dependent_capacity_exceeded")
+
+    def test_validate_rejects_cross_template_pair(self):
+        other_template = Template.objects.create(
+            user=self.user, template_name="Other", description="d"
+        )
+        other_task = TemplateTask.objects.create(
+            template=other_template, task_name="Other task", day_offset=0, duration_days=1
+        )
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {
+            "task": other_task.template_task_id,
+            "depends_on_task": self.task_a.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["valid"])
+        self.assertEqual(response.data["issues"][0]["error"], "cross_template")
+
+    def test_validate_requires_both_fields(self):
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {"task": self.task_a.template_task_id})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_validate_returns_404_for_unknown_task(self):
+        url = reverse("task-dependencies-validate")
+        response = self.client.post(url, {
+            "task": 999999,
+            "depends_on_task": self.task_a.template_task_id,
+        })
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

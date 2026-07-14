@@ -68,6 +68,24 @@
   }
 }
 
+/* Two-column detail/wizard pages (CycleDetailView, TemplateDetailView,
+   TemplateCreateView) stack into a single column on tablet and
+   phone — a fixed-width sticky side panel next to a main column
+   only works down to about laptop width. */
+@media (max-width: 1024px) {
+  .two-col,
+  .two-panel {
+    flex-direction: column;
+  }
+
+  .two-col .col-side,
+  .two-panel .panel-right {
+    width: 100% !important;
+    position: static !important;
+    top: auto !important;
+  }
+}
+
 /* Two-column form rows stack on small phones */
 @media (max-width: 480px) {
   .form-row-2 {

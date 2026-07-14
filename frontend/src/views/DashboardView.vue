@@ -1,21 +1,23 @@
 <!-- /frontend/src/views/DashboardView.vue -->
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
-import { getCycles, getCycleTasks } from '@/api/cycles'
+import { getCycles, getCycleTasks, getCycleActivities } from '@/api/cycles'
 
 const router = useRouter()
 const onboardingStore = useOnboardingStore()
 
 const cycles = ref([])
 const cycleTasksMap = ref({}) // cycleId -> tasks[]
+const cycleActivitiesMap = ref({}) // cycleId -> activities[]
 const loading = ref(true)
 const error = ref('')
+const ganttScrollEl = ref(null)
 
 const today = new Date()
 today.setHours(0, 0, 0, 0)
@@ -28,17 +30,24 @@ async function loadDashboard() {
     const { data } = await getCycles()
     cycles.value = Array.isArray(data) ? data : (data.results || [])
 
-    // Load tasks for all running cycles in parallel
+    // Load tasks AND activities for all running cycles in parallel
     const running = cycles.value.filter(c => c.status === 'running')
-    const taskResults = await Promise.all(
-      running.map(c => getCycleTasks(c.cycle_id).then(r => ({
+    const [taskResults, activityResults] = await Promise.all([
+      Promise.all(running.map(c => getCycleTasks(c.cycle_id).then(r => ({
         cycleId: c.cycle_id,
         tasks: Array.isArray(r.data) ? r.data : (r.data.results || [])
-      })))
-    )
-    const map = {}
-    for (const { cycleId, tasks } of taskResults) map[cycleId] = tasks
-    cycleTasksMap.value = map
+      })))),
+      Promise.all(running.map(c => getCycleActivities(c.cycle_id).then(r => ({
+        cycleId: c.cycle_id,
+        activities: Array.isArray(r.data) ? r.data : (r.data.results || [])
+      })))),
+    ])
+    const taskMap = {}
+    for (const { cycleId, tasks } of taskResults) taskMap[cycleId] = tasks
+    cycleTasksMap.value = taskMap
+    const activityMap = {}
+    for (const { cycleId, activities } of activityResults) activityMap[cycleId] = activities
+    cycleActivitiesMap.value = activityMap
   } catch (e) {
     error.value = 'Failed to load dashboard data.'
   } finally {
@@ -79,7 +88,7 @@ const overdueTasksList = computed(() => {
     for (const task of tasks) {
       const end = new Date(task.calculated_end_date)
       end.setHours(0, 0, 0, 0)
-      if (end < today && task.status !== 'completed') {
+      if (end < today && task.status !== 'completed' && task.status !== 'skipped') {
         result.push({ ...task, cycleName: cycle.cycle_name, cycleId: cycle.cycle_id })
       }
     }
@@ -144,6 +153,7 @@ const ganttData = computed(() => {
   // Build cycle groups
   const groups = runningCycles.value.map(cycle => {
     const tasks = cycleTasksMap.value[cycle.cycle_id] || []
+    const activities = cycleActivitiesMap.value[cycle.cycle_id] || []
 
     // Cycle bar — from start_date to last task end_date
     const taskEndDates = tasks.map(t => t.calculated_end_date).filter(Boolean).sort()
@@ -154,11 +164,27 @@ const ganttData = computed(() => {
       durationDays: dateDurationDays(cycle.start_date, cycleEnd),
     }
 
-    // Task bars — sort by start date
+    // Activity bars — this cycle's own activities, same violet bar
+    // style used on the per-cycle Gantt view.
+    const activityBars = [...activities]
+      .sort((a, b) => new Date(a.calculated_start_date) - new Date(b.calculated_start_date))
+      .map(act => ({
+        id: act.cycle_activity_id,
+        name: act.activity_name,
+        dayOffset: dateToDayOffset(act.calculated_start_date),
+        durationDays: dateDurationDays(act.calculated_start_date, act.calculated_end_date),
+        startDate: act.calculated_start_date,
+        endDate: act.calculated_end_date,
+      }))
+
+    // Task bars — sort by start date. Completed/skipped tasks are
+    // never "overdue" regardless of their end date — that status is
+    // exclusively about tasks still actually open past their date.
     const taskBars = [...tasks]
       .sort((a, b) => new Date(a.calculated_start_date) - new Date(b.calculated_start_date))
       .map(task => {
-        const isOverdue = new Date(task.calculated_end_date) < today && task.status !== 'completed'
+        const isOverdue = task.status !== 'completed' && task.status !== 'skipped'
+          && new Date(task.calculated_end_date) < today
         const isToday = task.calculated_start_date === todayStr
         return {
           id: task.cycle_task_id,
@@ -174,15 +200,19 @@ const ganttData = computed(() => {
         }
       })
 
-    // Progress
-    const completed = tasks.filter(t => t.status === 'completed').length
-    const progress = tasks.length > 0 ? Math.round((completed / tasks.length) * 100) : 0
+    // Progress — completed AND skipped both count as "done" for a
+    // cycle's progress, matching the per-cycle detail page's own
+    // definition (a cycle finishes once every mandatory task is
+    // completed or skipped).
+    const done = tasks.filter(t => t.status === 'completed' || t.status === 'skipped').length
+    const progress = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0
 
     return {
       cycleId: cycle.cycle_id,
       cycleName: cycle.cycle_name,
       startDate: cycle.start_date,
       cycleBar,
+      activityBars,
       taskBars,
       progress,
       taskCount: tasks.length,
@@ -192,6 +222,17 @@ const ganttData = computed(() => {
   return { groups, ticks, todayOffsetDays, totalDays, pxPerDay: GANTT_PX_PER_DAY, totalWidth: totalDays * GANTT_PX_PER_DAY }
 })
 
+// Auto-scroll the shared timeline so "today" starts near the left
+// edge instead of wherever the combined date range happens to begin
+// — without this, a cycle whose dates sit far from the earliest
+// cycle's start can end up scrolled completely out of view, looking
+// like its bars never rendered at all.
+function scrollGanttToToday() {
+  if (!ganttScrollEl.value || !ganttData.value) return
+  const targetLeft = Math.max(0, ganttData.value.todayOffsetDays * ganttData.value.pxPerDay - 80)
+  ganttScrollEl.value.scrollLeft = targetLeft
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return '—'
   return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -199,6 +240,7 @@ function formatDate(dateStr) {
 
 function taskBarClass(bar) {
   if (bar.status === 'completed') return 'tb-completed'
+  if (bar.status === 'skipped') return 'tb-skipped'
   if (bar.isOverdue) return 'tb-overdue'
   if (bar.status === 'in_progress') return 'tb-in-progress'
   if (bar.isMandatory) return 'tb-mandatory'
@@ -207,6 +249,8 @@ function taskBarClass(bar) {
 
 onMounted(async () => {
   await loadDashboard()
+  await nextTick()
+  scrollGanttToToday()
   if (onboardingStore.hasCompleted('sidebar')) {
     onboardingStore.maybeAutoStart('dashboard')
   }
@@ -327,18 +371,20 @@ onMounted(async () => {
           <!-- GANTT CHART -->
           <div v-if="ganttData" class="gantt-section" data-tour="dash-cycles">
             <div class="section-header">
-              <div class="section-title">Running cycles timeline</div>
+              <div class="section-title">Running cycles timeline · activities &amp; tasks</div>
               <div class="gantt-legend">
                 <span class="gl-item"><span class="gl-dot" style="background:#7C3AED;opacity:0.4;"></span>Cycle span</span>
+                <span class="gl-item"><span class="gl-dot" style="background:#7C3AED;"></span>Activity</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#CBD5E1;"></span>Pending</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#F59E0B;"></span>In progress</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#EF4444;"></span>Overdue</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#22C55E;"></span>Completed</span>
+                <span class="gl-item"><span class="gl-dot" style="background:#94A3B8;"></span>Skipped</span>
               </div>
             </div>
 
             <div class="gantt-card">
-              <div class="gantt-scroll-row">
+              <div class="gantt-scroll-row" ref="ganttScrollEl">
 
                 <!-- STICKY SIDEBAR: every row's label, top to bottom -->
                 <div class="gantt-sidebar">
@@ -352,6 +398,14 @@ onMounted(async () => {
                       <span class="gantt-cycle-name">{{ group.cycleName }}</span>
                       <span class="gantt-cycle-progress">{{ group.progress }}%</span>
                     </div>
+                    <div
+                      v-for="bar in group.activityBars"
+                      :key="'act-' + bar.id"
+                      class="gantt-side-cell gantt-activity-label"
+                      style="height: 24px;"
+                      :title="bar.name"
+                      @click="router.push({ name: 'cycle-detail', params: { id: group.cycleId } })"
+                    >{{ bar.name }}</div>
                     <div
                       v-for="bar in group.taskBars"
                       :key="bar.id"
@@ -387,6 +441,19 @@ onMounted(async () => {
                       <div
                         class="gantt-bar gantt-bar-cycle"
                         :style="{ left: (group.cycleBar.dayOffset * ganttData.pxPerDay) + 'px', width: Math.max(group.cycleBar.durationDays * ganttData.pxPerDay, 6) + 'px' }"
+                      ></div>
+                    </div>
+                    <div
+                      v-for="bar in group.activityBars"
+                      :key="'act-content-' + bar.id"
+                      class="gantt-content-cell"
+                      style="height: 24px;"
+                      @click="router.push({ name: 'cycle-detail', params: { id: group.cycleId } })"
+                    >
+                      <div
+                        class="gantt-bar gantt-bar-activity"
+                        :style="{ left: (bar.dayOffset * ganttData.pxPerDay) + 'px', width: Math.max(bar.durationDays * ganttData.pxPerDay, 6) + 'px' }"
+                        :title="`${bar.name}: ${formatDate(bar.startDate)} → ${formatDate(bar.endDate)}`"
                       ></div>
                     </div>
                     <div
@@ -526,6 +593,7 @@ onMounted(async () => {
 .gantt-cycle-name { font-size: var(--font-label); font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
 .gantt-cycle-progress { font-size: var(--font-hint); font-weight: 600; color: var(--violet); flex-shrink: 0; }
 .gantt-task-label { font-size: var(--font-hint); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; cursor: pointer; }
+.gantt-activity-label { font-size: var(--font-hint); font-weight: 500; color: var(--violet); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; cursor: pointer; }
 
 .gantt-content { flex-shrink: 0; position: relative; }
 .gantt-content-cell { position: relative; box-sizing: border-box; cursor: pointer; }
@@ -550,12 +618,14 @@ onMounted(async () => {
 .gantt-bar:hover { opacity: 0.85; }
 
 .gantt-bar-cycle { height: 20px; background: var(--violet); opacity: 0.15; border-radius: 4px; }
+.gantt-bar-activity { height: 16px; background: linear-gradient(90deg, #7C3AED 0%, #A78BFA 100%); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
 .gantt-bar-task { height: 16px; }
 
 .tb-pending { background: #CBD5E1; }
 .tb-in-progress { background: #F59E0B; }
 .tb-completed { background: #22C55E; }
 .tb-overdue { background: #EF4444; }
+.tb-skipped { background: #94A3B8; }
 .tb-mandatory { background: #7C3AED; }
 
 /* ── TWO COL ── */

@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     TemplateViewSet,
+    TemplateCategoryViewSet,
     TemplateTaskViewSet,
     TemplateActivityViewSet,
     TagViewSet,
@@ -13,6 +14,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register("templates", TemplateViewSet, basename="templates")
+router.register("template-categories", TemplateCategoryViewSet, basename="template-categories")
 router.register("template-tasks", TemplateTaskViewSet, basename="template-tasks")
 router.register("template-activities", TemplateActivityViewSet, basename="template-activities")
 router.register("tags", TagViewSet, basename="tags")
