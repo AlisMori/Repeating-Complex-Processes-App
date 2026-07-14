@@ -8,10 +8,21 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseDatePicker from '@/components/ui/BaseDatePicker.vue'
+import CycleGanttChart from '@/components/CycleGanttChart.vue'
 import { useToastStore } from '@/stores/toast'
-import { getCycle, getCycleTasks, getCycleActivities } from '@/api/cycles'
-import { getTemplateTaskDetail } from '@/api/templates'
-import api from '@/api/axios'
+import {
+  getCycle, getCycleTasks, getCycleActivities,
+  shutdownCycle,
+  updateCycleTask, previewTaskShift, applyTaskShift,
+  setTaskNote, clearTaskNote,
+  updateCycleActivity, setActivityNote, clearActivityNote,
+} from '@/api/cycles'
+import { getTemplateTaskDetail, getTaskDependencies, getTaskTags, getActivityTags, getTags } from '@/api/templates'
+import {
+  getErrorMessage, isCycleFrozenError, isPrerequisitesUnresolvedError,
+  isDependencyConflictError, getUnresolvedPrerequisites,
+} from '@/utils/apiErrors'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,13 +31,40 @@ const toast = useToastStore()
 
 const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
-const delayModal = ref({ open: false, taskId: null, days: '' })
-const delayLoading = ref(false)
+
+// Shift modal replaces the old "record delay" modal — it wraps the
+// real backend flow (shift_preview then shift), matching what
+// dependency shifting/fixed-date locking actually allow.
+const shiftModal = ref({ open: false, task: null, mode: 'delay', days: '', newDate: '', scope: 'single', overrideFixed: false, preview: null })
+const shiftLoading = ref(false)
+const shiftPreviewLoading = ref(false)
+
 const taskDetailModal = ref({ open: false, task: null, templateDetail: null, loading: false })
+
+// One shared note editor for both tasks and activities.
+const noteModal = ref({ open: false, kind: null, id: null, text: '' })
+const noteLoading = ref(false)
+
+// Resize an in-flight activity's date range.
+const activityEditModal = ref({ open: false, activity: null, start: '', end: '' })
+const activityEditLoading = ref(false)
+
+// A task is being marked completed but depends on tasks that aren't
+// finished — ask the user to resolve each one instead of silently
+// failing (see task_status_engine.find_unresolved_prerequisites).
+const prereqModal = ref({ open: false, taskId: null, newStatus: null, unresolved: [], choices: {} })
+const prereqLoading = ref(false)
+
+const viewMode = ref('list') // 'list' | 'gantt'
+const listGroupBy = ref('status') // 'status' | 'tag'
 
 const cycle = ref(null)
 const tasks = ref([])
 const activities = ref([])
+const dependencies = ref([]) // TaskDependency edges for this cycle's template
+const tags = ref([])
+const taskTags = ref([]) // TemplateTaskTag rows for this cycle's template
+const activityTags = ref([]) // TemplateActivityTag rows for this cycle's template
 const loading = ref(true)
 const error = ref('')
 
@@ -45,53 +83,51 @@ function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-function isToday(dateStr) {
-  const d = parseDate(dateStr)
-  return d && d.getTime() === today.getTime()
-}
-
 function isOverdue(task) {
   const end = parseDate(task.calculated_end_date)
   return end && end < today && task.status !== 'completed' && task.status !== 'skipped'
 }
 
+// Mirrors task_status_engine.ALLOWED_TRANSITIONS exactly, keyed by
+// the task's REAL status field — not a client-guessed "is this past
+// its date" check. That guess used to decide which options showed,
+// which could disagree with the actual stored status (overdue is a
+// real status the backend sets via a scheduled job, not just "the
+// date has passed"), silently hiding valid transitions like
+// pending -> in_progress whenever the client's own date math
+// disagreed with what was actually in the database.
+const ALLOWED_TRANSITIONS = {
+  pending: ['in_progress', 'skipped'],
+  in_progress: ['completed', 'skipped'],
+  overdue: ['in_progress', 'completed', 'skipped'],
+  completed: [],
+  skipped: [],
+}
+
 function availableStatusOptions(task) {
-  if (isOverdue(task)) {
-    return [
-      { value: task.status, label: statusLabel(task.status) },
-      { value: 'skipped', label: 'Skipped' },
-      { value: 'completed', label: 'Completed' },
-    ]
-  }
-  if (task.status === 'pending') {
-    return [
-      { value: 'pending', label: 'Pending' },
-      { value: 'in_progress', label: 'In Progress' },
-      { value: 'skipped', label: 'Skipped' },
-    ]
-  }
-  if (task.status === 'in_progress') {
-    return [
-      { value: 'in_progress', label: 'In Progress' },
-      { value: 'completed', label: 'Completed' },
-      { value: 'skipped', label: 'Skipped' },
-    ]
-  }
-  return [{ value: task.status, label: statusLabel(task.status) }]
-}
-
-function isDueToday(task) {
-  return isToday(task.calculated_start_date) && task.status !== 'completed' && task.status !== 'skipped'
-}
-
-function isUpcoming(task) {
-  const start = parseDate(task.calculated_start_date)
-  return start && start > today && task.status !== 'completed' && task.status !== 'skipped'
+  // Mirrors the backend's effective_status_for_transitions exactly:
+  // mark_overdue_tasks is a scheduled job, so a task can be visually
+  // late for a while with status still literally "pending" before
+  // that job next runs. Options shown here must match what the task
+  // actually looks like, not depend on that job's timing — otherwise
+  // "Completed" silently disappears for a task everyone can see is
+  // overdue, until the job eventually catches up.
+  const effectiveStatus = (task.status === 'pending' && isOverdue(task)) ? 'overdue' : task.status
+  const allowed = ALLOWED_TRANSITIONS[effectiveStatus] || []
+  return [
+    { value: task.status, label: statusLabel(task.status) },
+    ...allowed.map(v => ({ value: v, label: statusLabel(v) })),
+  ]
 }
 
 const overdueTasks = computed(() => tasks.value.filter(isOverdue))
-const todayTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && isDueToday(t)))
-const upcomingTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && !isDueToday(t) && isUpcoming(t)))
+// Pending/In Progress both exclude anything already caught by
+// isOverdue — a task whose end date has passed is shown as Overdue
+// regardless of its literal stored status (matches the backend's
+// effective_status_for_transitions, which is why "Completed" is
+// offered directly on these even before mark_overdue_tasks has run).
+const pendingTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.status === 'pending'))
+const inProgressTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.status === 'in_progress'))
 const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed'))
 const skippedTasks = computed(() => tasks.value.filter(t => t.status === 'skipped'))
 
@@ -121,60 +157,388 @@ async function loadCycle() {
     ])
     cycle.value = cycleRes.data
     tasks.value = Array.isArray(tasksRes.data) ? tasksRes.data : (tasksRes.data.results || [])
-    activities.value = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
-  } catch {
-    error.value = 'Failed to load cycle. Please try again.'
+    {
+      const rawActivities = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
+      const seenActivityIds = new Set()
+      activities.value = rawActivities.filter(a => {
+        if (seenActivityIds.has(a.cycle_activity_id)) return false
+        seenActivityIds.add(a.cycle_activity_id)
+        return true
+      })
+    }
+
+    // Dependencies live on the template's tasks, not the cycle's —
+    // pull every edge and keep only the ones whose task belongs to
+    // this cycle's template, same approach as TemplateDetailView.
+    try {
+      const depsRes = await getTaskDependencies()
+      const templateTaskIds = new Set(tasks.value.map(t => t.template_task))
+      const allDeps = Array.isArray(depsRes.data) ? depsRes.data : (depsRes.data.results || [])
+      dependencies.value = allDeps.filter(d => templateTaskIds.has(d.task))
+    } catch {
+      dependencies.value = []
+    }
+
+    // Tags also live on the template's tasks/activities, not the
+    // cycle's own — a cycle task/activity shows whatever tags its
+    // originating template task/activity currently carries.
+    try {
+      const templateTaskIds = new Set(tasks.value.map(t => t.template_task))
+      const templateActivityIds = new Set(activities.value.map(a => a.template_activity))
+      const [tagsRes, taskTagsRes, activityTagsRes] = await Promise.all([
+        getTags(), getTaskTags(), getActivityTags(),
+      ])
+      tags.value = Array.isArray(tagsRes.data) ? tagsRes.data : (tagsRes.data.results || [])
+      const allTaskTags = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
+      taskTags.value = allTaskTags.filter(tt => templateTaskIds.has(tt.template_task))
+      const allActivityTags = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
+      activityTags.value = allActivityTags.filter(at => templateActivityIds.has(at.template_activity))
+    } catch {
+      tags.value = []
+      taskTags.value = []
+      activityTags.value = []
+    }
+  } catch (e) {
+    error.value = getErrorMessage(e, 'Failed to load cycle. Please try again.')
   } finally {
     loading.value = false
   }
 }
 
+// Looks up the dependency (if any) for a cycle task via its
+// template_task id, and resolves it back to the cycle task that
+// represents that prerequisite in THIS cycle.
+function dependencyForTask(task) {
+  const edge = dependencies.value.find(d => d.task === task.template_task)
+  if (!edge) return null
+  return tasks.value.find(t => t.template_task === edge.depends_on_task) || null
+}
+
+function tagsForTask(task) {
+  return taskTags.value
+    .filter(tt => tt.template_task === task.template_task)
+    .map(tt => tags.value.find(t => t.tag_id === tt.tag))
+    .filter(Boolean)
+}
+
+const hasAnyTaskTag = computed(() => tasks.value.some(t => tagsForTask(t).length > 0))
+
+// Group by tag: a task with more than one tag appears once per tag
+// group (matches how the Gantt's own group-by-tag mode works), tasks
+// with none land in "Untagged" at the end.
+const tagGroups = computed(() => {
+  const groups = {}
+  for (const t of tasks.value) {
+    const taskTagList = tagsForTask(t)
+    if (taskTagList.length === 0) {
+      groups['Untagged'] = groups['Untagged'] || []
+      groups['Untagged'].push(t)
+    } else {
+      for (const tag of taskTagList) {
+        groups[tag.tag_name] = groups[tag.tag_name] || []
+        groups[tag.tag_name].push(t)
+      }
+    }
+  }
+  return Object.keys(groups)
+    .sort((a, b) => {
+      if (a === 'Untagged') return 1
+      if (b === 'Untagged') return -1
+      return a.localeCompare(b)
+    })
+    .map(name => ({ name, tasks: groups[name] }))
+})
+
+function tagsForActivity(activity) {
+  return activityTags.value
+    .filter(at => at.template_activity === activity.template_activity)
+    .map(at => tags.value.find(t => t.tag_id === at.tag))
+    .filter(Boolean)
+}
+
+// Which activity a task belongs to — makes the task<->activity
+// grouping visible on the task card itself, not just on the
+// activity's own card.
+function activityForTask(task) {
+  if (!task.cycle_activity) return null
+  return activities.value.find(a => a.cycle_activity_id === task.cycle_activity) || null
+}
+
+function tasksForActivity(activity) {
+  return tasks.value.filter(t => t.cycle_activity === activity.cycle_activity_id)
+}
+
+// Activities are collapsed by default (name/dates/status only) —
+// expand one to see its description, note, tags, and every task
+// under it in the same place, instead of duplicating that task info
+// as always-visible cards mixed in with the status-grouped lists.
+const expandedActivityIds = ref(new Set())
+function toggleActivityExpanded(activity) {
+  const next = new Set(expandedActivityIds.value)
+  if (next.has(activity.cycle_activity_id)) {
+    next.delete(activity.cycle_activity_id)
+  } else {
+    next.add(activity.cycle_activity_id)
+  }
+  expandedActivityIds.value = next
+}
+
 async function updateTaskStatus(taskId, newStatus) {
   try {
-    await api.patch(`/cycle-tasks/${taskId}/`, { status: newStatus })
+    const { data } = await updateCycleTask(taskId, newStatus)
     await loadCycle()
-    toast.success('Task status updated.')
-  } catch {
-    toast.error('Failed to update task status.')
+    if (data.cycle_just_completed) {
+      toast.success('Last task of the cycle completed/skipped — cycle shut down.')
+    } else {
+      toast.success('Task status updated.')
+    }
+  } catch (e) {
+    if (isPrerequisitesUnresolvedError(e)) {
+      prereqModal.value = {
+        open: true,
+        taskId,
+        newStatus,
+        unresolved: getUnresolvedPrerequisites(e),
+        choices: {},
+      }
+      return
+    }
+    if (isCycleFrozenError(e)) {
+      toast.error('This cycle is completed or shut down, so its tasks can no longer be changed.')
+      return
+    }
+    toast.error(getErrorMessage(e, 'Failed to update task status.'))
   }
 }
 
-function openDelayModal(taskId) {
-  delayModal.value = { open: true, taskId, days: '' }
+async function confirmPrereqResolution() {
+  const { taskId, newStatus, unresolved, choices } = prereqModal.value
+  const missing = unresolved.filter(t => !choices[t.cycle_task_id])
+  if (missing.length) {
+    toast.error(`Resolve "${missing[0].task_name}" first — choose completed or skipped.`)
+    return
+  }
+  prereqLoading.value = true
+  try {
+    await updateCycleTask(taskId, newStatus, choices)
+    prereqModal.value.open = false
+    await loadCycle()
+    toast.success('Prerequisites resolved and task status updated.')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to resolve prerequisites.'))
+  } finally {
+    prereqLoading.value = false
+  }
 }
 
-async function confirmRecordDelay() {
-  const n = parseInt(delayModal.value.days, 10)
-  if (isNaN(n) || n < 0) {
+// ── SHIFT (delay / reschedule) ─────────────────────────────
+
+// True if at least one other task in this cycle directly depends on
+// this one — shifting it "single" scope only (leaving dependents in
+// place) would silently push the schedule out of sync with the
+// dependency it's supposed to satisfy, so that option is blocked
+// below rather than just risked.
+function hasDirectDependents(task) {
+  return tasks.value.some(t => dependencyForTask(t)?.cycle_task_id === task.cycle_task_id)
+}
+
+function openShiftModal(task) {
+  const forceCascade = hasDirectDependents(task)
+  shiftModal.value = {
+    open: true, task, mode: 'delay', days: '', newDate: task.calculated_end_date,
+    scope: forceCascade ? 'cascade' : 'single', overrideFixed: false, preview: null,
+    hasDependents: forceCascade, maxSafeDelayDays: null,
+  }
+  // Fetch the safe-delay ceiling right away (independent of whatever
+  // delay value ends up entered) so the input can show/enforce it
+  // up front instead of the user finding out only after guessing.
+  previewTaskShift(task.cycle_task_id, { delayDays: 0 })
+    .then(({ data }) => { shiftModal.value.maxSafeDelayDays = data.max_safe_delay_days ?? null })
+    .catch(() => { shiftModal.value.maxSafeDelayDays = null })
+}
+
+function shiftPayload() {
+  const m = shiftModal.value
+  return m.mode === 'delay'
+    ? { delayDays: Number(m.days) }
+    : { newEndDate: m.newDate }
+}
+
+const cascadeBlockedMessage = computed(() => {
+  const plan = shiftModal.value.preview?.cascade_plan || []
+  const blocked = plan.filter(step => !step.shiftable)
+  if (blocked.length === 0) return "This cascade can't proceed as planned."
+  const names = blocked.map(s => `"${s.task_name}"`).join(', ')
+  return `${names} ${blocked.length > 1 ? 'have' : 'has'} a fixed date and would need to move to keep this dependency chain valid. Check "Move fixed-date tasks too" above, or reschedule ${blocked.length > 1 ? 'them' : 'it'} directly first.`
+})
+
+const cascadeOnlyBlockedByFixedDate = computed(() => {
+  const blocked = (shiftModal.value.preview?.cascade_plan || []).filter(step => !step.shiftable)
+  return blocked.length > 0 && blocked.every(step => step.blocking_reason === 'fixed_date')
+})
+
+const canApplyShift = computed(() => {
+  const p = shiftModal.value.preview
+  if (!p) return false
+  if (p.upstream_conflict) return false
+  if (shiftModal.value.scope === 'single' && !p.single_possible) return false
+  if (shiftModal.value.scope === 'cascade' && !p.cascade_possible) {
+    // p.cascade_possible reflects the plan as previewed, WITHOUT the
+    // override — the preview endpoint has no override_fixed input,
+    // so it can never itself report "possible" once a downstream
+    // task is fixed-date. If every blocked step is blocked ONLY by a
+    // fixed date (not some other reason), checking "Move fixed-date
+    // tasks too" is exactly what makes it possible; without this,
+    // ticking that box could never actually unblock Apply.
+    if (!(cascadeOnlyBlockedByFixedDate.value && shiftModal.value.overrideFixed)) return false
+  }
+  return true
+})
+
+async function runShiftPreview() {
+  const m = shiftModal.value
+  if (m.mode === 'delay' && (m.days === '' || isNaN(Number(m.days)) || Number(m.days) < 0)) {
     toast.error('Please enter a valid number of days.')
     return
   }
-  delayLoading.value = true
+  if (m.mode === 'delay' && m.scope === 'single' && m.maxSafeDelayDays !== null && Number(m.days) > m.maxSafeDelayDays) {
+    toast.error(`Only up to ${m.maxSafeDelayDays} day${m.maxSafeDelayDays !== 1 ? 's' : ''} is safe without moving dependent tasks. Switch to cascade scope for a longer delay.`)
+    return
+  }
+  if (m.mode === 'date' && !m.newDate) {
+    toast.error('Please pick a date.')
+    return
+  }
+  shiftPreviewLoading.value = true
   try {
-    const { data } = await api.post(`/cycle-tasks/${delayModal.value.taskId}/record_delay/`, { delay_days: n })
-    delayModal.value.open = false
-    await loadCycle()
-    if (data.schedule_warnings?.fixed_date_conflicts?.length) {
-      toast.error(`Delay recorded, but conflicts with a fixed date: ${data.schedule_warnings.fixed_date_conflicts.join(', ')}`)
-    } else {
-      toast.success('Delay recorded and dependent tasks recalculated.')
+    const { data } = await previewTaskShift(m.task.cycle_task_id, shiftPayload())
+    shiftModal.value.preview = data
+  } catch (e) {
+    if (isCycleFrozenError(e)) {
+      toast.error('This cycle is completed or shut down, so its tasks can no longer be rescheduled.')
+      shiftModal.value.open = false
+      return
     }
-  } catch {
-    toast.error('Failed to record delay.')
+    toast.error(getErrorMessage(e, 'Failed to preview this change.'))
   } finally {
-    delayLoading.value = false
+    shiftPreviewLoading.value = false
+  }
+}
+
+async function confirmShift() {
+  const m = shiftModal.value
+  shiftLoading.value = true
+  try {
+    const { data } = await applyTaskShift(m.task.cycle_task_id, {
+      ...shiftPayload(),
+      scope: m.scope,
+      overrideFixed: m.overrideFixed,
+    })
+    shiftModal.value.open = false
+    await loadCycle()
+    if (data.warnings?.length) {
+      toast.warning(data.warnings.map(w => w.message || w).join(' '))
+    } else {
+      toast.success(m.scope === 'cascade' ? 'Date updated and dependent tasks recalculated.' : 'Date updated.')
+    }
+  } catch (e) {
+    if (isCycleFrozenError(e)) {
+      toast.error('This cycle is completed or shut down, so its tasks can no longer be rescheduled.')
+      shiftModal.value.open = false
+      return
+    }
+    if (isDependencyConflictError(e)) {
+      // Surface the conflict but keep the modal open so the user can
+      // switch to cascade scope or override the fixed date.
+      toast.error(getErrorMessage(e, 'This change conflicts with a dependency or a fixed-date task.'))
+      return
+    }
+    toast.error(getErrorMessage(e, 'Failed to update the schedule.'))
+  } finally {
+    shiftLoading.value = false
+  }
+}
+
+// ── NOTES (tasks and activities share one modal) ───────────
+
+function openNoteModal(kind, item) {
+  noteModal.value = { open: true, kind, id: kind === 'task' ? item.cycle_task_id : item.cycle_activity_id, text: item.note_text || '' }
+}
+
+async function saveNote() {
+  const { kind, id, text } = noteModal.value
+  noteLoading.value = true
+  try {
+    if (!text.trim()) {
+      kind === 'task' ? await clearTaskNote(id) : await clearActivityNote(id)
+    } else {
+      kind === 'task' ? await setTaskNote(id, text.trim()) : await setActivityNote(id, text.trim())
+    }
+    noteModal.value.open = false
+    await loadCycle()
+    toast.success('Note saved.')
+  } catch (e) {
+    if (isCycleFrozenError(e)) {
+      toast.error('This cycle is completed or shut down, so its notes can no longer be edited.')
+      noteModal.value.open = false
+      return
+    }
+    toast.error(getErrorMessage(e, 'Failed to save note.'))
+  } finally {
+    noteLoading.value = false
+  }
+}
+
+// ── ACTIVITY DATE EDIT ──────────────────────────────────────
+
+function openActivityEdit(activity) {
+  activityEditModal.value = {
+    open: true, activity,
+    start: activity.calculated_start_date,
+    end: activity.calculated_end_date,
+  }
+}
+
+async function saveActivityEdit() {
+  const { activity, start, end } = activityEditModal.value
+  if (!start || !end) {
+    toast.error('Both a start and end date are required.')
+    return
+  }
+  if (start > end) {
+    toast.error('An activity cannot end before it starts.')
+    return
+  }
+  activityEditLoading.value = true
+  try {
+    await updateCycleActivity(activity.cycle_activity_id, { calculatedStartDate: start, calculatedEndDate: end })
+    activityEditModal.value.open = false
+    await loadCycle()
+    toast.success('Activity dates updated.')
+  } catch (e) {
+    if (isCycleFrozenError(e)) {
+      toast.error('This cycle is completed or shut down, so its activities can no longer be resized.')
+      activityEditModal.value.open = false
+      return
+    }
+    // Most common case: a task inside the activity would fall
+    // outside the new range — the backend rejects the resize rather
+    // than moving tasks, so tell the user exactly that.
+    toast.error(getErrorMessage(e, 'Failed to resize this activity.'))
+  } finally {
+    activityEditLoading.value = false
   }
 }
 
 async function confirmShutdownCycle() {
   shutdownLoading.value = true
   try {
-    await api.post(`/cycles/${cycleId}/shut_down/`)
+    await shutdownCycle(cycleId)
     shutdownModal.value = false
     await loadCycle()
     toast.success('Cycle shut down.')
-  } catch {
-    toast.error('Failed to shut down cycle.')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to shut down cycle.'))
   } finally {
     shutdownLoading.value = false
   }
@@ -206,6 +570,54 @@ async function openTaskDetail(task) {
     taskDetailModal.value.loading = false
   }
 }
+
+// Feeds the dedicated CycleGanttChart component (grouping, status
+// colors, click-to-inspect) — converts the cycle's absolute dates
+// into days-from-cycle-start so the chart stays purely relative.
+function dayOffset(dateStr) {
+  if (!cycle.value?.start_date || !dateStr) return 0
+  const start = parseDate(cycle.value.start_date)
+  const d = parseDate(dateStr)
+  return Math.round((d - start) / (1000 * 60 * 60 * 24))
+}
+
+const ganttData = computed(() => {
+  if (!cycle.value || (tasks.value.length === 0 && activities.value.length === 0)) return null
+
+  const taskBars = tasks.value.map(t => {
+    const depTask = dependencyForTask(t)
+    return {
+      id: t.cycle_task_id,
+      name: t.task_name,
+      start: dayOffset(t.calculated_start_date),
+      end: dayOffset(t.calculated_end_date),
+      startDate: t.calculated_start_date,
+      endDate: t.calculated_end_date,
+      isMandatory: t.is_mandatory,
+      isFixed: t.is_fixed_date,
+      status: t.status,
+      activityId: t.cycle_activity || null,
+      depName: depTask ? depTask.task_name : null,
+      dependsOnId: depTask ? depTask.cycle_task_id : null,
+      tags: tagsForTask(t),
+    }
+  })
+
+  const activityBars = activities.value.map(a => ({
+    id: a.cycle_activity_id,
+    name: a.activity_name,
+    start: dayOffset(a.calculated_start_date),
+    end: dayOffset(a.calculated_end_date),
+    startDate: a.calculated_start_date,
+    endDate: a.calculated_end_date,
+    tags: tagsForActivity(a),
+  }))
+
+  const allEnds = [...taskBars.map(b => b.end), ...activityBars.map(b => b.end)]
+  const maxDay = Math.max(...allEnds, 1)
+
+  return { taskBars, activityBars, maxDay }
+})
 
 function formatTaskReminders(val) {
   if (!val || (Array.isArray(val) && val.length === 0)) return 'None'
@@ -274,18 +686,98 @@ onMounted(loadCycle)
           </div>
         </div>
 
-        <div class="two-col">
+        <!-- VIEW MODE TOGGLE -->
+        <div class="view-toggle-bar">
+          <div class="view-toggle">
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              List
+            </button>
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'gantt' }" @click="viewMode = 'gantt'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="4" x2="8" y2="10"/></svg>
+              Gantt
+            </button>
+          </div>
+          <div v-if="viewMode === 'list'" class="view-toggle" style="margin-left: 10px;">
+            <span class="view-toggle-label">Group by</span>
+            <button type="button" class="view-toggle-btn" :class="{ active: listGroupBy === 'status' }" @click="listGroupBy = 'status'">Status</button>
+            <button type="button" class="view-toggle-btn" :class="{ active: listGroupBy === 'tag' }" :disabled="!hasAnyTaskTag" @click="listGroupBy = 'tag'">Tag</button>
+          </div>
+        </div>
+
+        <!-- GANTT VIEW -->
+        <div v-if="viewMode === 'gantt'" class="gantt-card">
+          <div class="gantt-header">Timeline · Day 0 = {{ formatDate(cycle.start_date) }}</div>
+          <div v-if="!ganttData" class="gantt-empty">No tasks or activities to display.</div>
+          <CycleGanttChart v-else :task-bars="ganttData.taskBars" :activity-bars="ganttData.activityBars" :max-day="ganttData.maxDay" :px-per-day="32" />
+        </div>
+
+        <!-- LIST VIEW · GROUPED BY TAG -->
+        <div v-else-if="listGroupBy === 'tag'" class="two-col">
+          <div class="col-main">
+            <div v-if="tagGroups.length === 0" class="empty-section">No tags assigned to any task yet.</div>
+            <div v-for="group in tagGroups" :key="group.name">
+              <div class="timeline-label">{{ group.name }}</div>
+              <div v-for="task in group.tasks" :key="task.cycle_task_id" class="task-card" :class="{ 'overdue-card': isOverdue(task), 'completed-card': task.status === 'completed', 'skipped-card': task.status === 'skipped' }" @click="openTaskDetail(task)">
+                <div class="tc-row">
+                  <div class="tc-left">
+                    <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
+                    <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
+                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
+                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
+                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
+                  </div>
+                  <div class="tc-right" @click.stop>
+                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <BaseSelect
+                      v-if="task.status !== 'completed' && task.status !== 'skipped'"
+                      class="status-select"
+                      :model-value="task.status"
+                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
+                    >
+                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </BaseSelect>
+                    <button v-else class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
+                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="two-col">
           <div class="col-main">
 
             <div v-if="activities.length > 0">
               <div class="timeline-label violet">Active Activities</div>
-              <div v-for="act in activities" :key="act.cycle_activity_id" class="activity-card">
-                <div class="act-row">
-                  <div class="act-name">{{ act.activity_name }}</div>
+              <div v-for="act in activities" :key="act.cycle_activity_id" class="activity-card" :class="{ 'activity-card-expanded': expandedActivityIds.has(act.cycle_activity_id) }">
+                <div class="act-row act-row-clickable" @click="toggleActivityExpanded(act)">
+                  <div class="act-name">
+                    <svg class="act-chevron" :class="{ 'act-chevron-open': expandedActivityIds.has(act.cycle_activity_id) }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
+                    {{ act.activity_name }}
+                    <span class="act-task-count">{{ tasksForActivity(act).length }} task{{ tasksForActivity(act).length !== 1 ? 's' : '' }}</span>
+                  </div>
                   <span class="tc-status status-activity">Activity</span>
                 </div>
                 <div class="act-dates">{{ formatDate(act.calculated_start_date) }} → {{ formatDate(act.calculated_end_date) }}</div>
-                <div v-if="act.note_text" class="act-note">{{ act.note_text }}</div>
+
+                <template v-if="expandedActivityIds.has(act.cycle_activity_id)">
+                  <div v-if="act.note_text" class="act-note">{{ act.note_text }}</div>
+                  <div v-if="tagsForActivity(act).length > 0" class="tc-tag-row"><span v-for="tag in tagsForActivity(act)" :key="tag.tag_id" class="tc-tag-chip tc-tag-chip-violet">{{ tag.tag_name }}</span></div>
+                  <div v-if="cycle.status === 'running'" class="act-actions">
+                    <button class="action-btn action-undo" @click.stop="openActivityEdit(act)">Edit dates</button>
+                    <button class="action-btn action-undo" @click.stop="openNoteModal('activity', act)">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
+                  </div>
+
+                  <div v-if="tasksForActivity(act).length > 0" class="act-task-list">
+                    <div v-for="task in tasksForActivity(act)" :key="task.cycle_task_id" class="act-task-row" @click.stop="openTaskDetail(task)">
+                      <span class="act-task-name">{{ task.task_name }}</span>
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="act-task-empty">No tasks under this activity yet.</div>
+                </template>
               </div>
             </div>
 
@@ -296,6 +788,9 @@ onMounted(loadCycle)
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span></div>
                     <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
+                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
+                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
+                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                     <div v-if="task.note_text" class="tc-note">{{ task.note_text }}</div>
                   </div>
 <div class="tc-right" @click.stop>
@@ -307,41 +802,23 @@ onMounted(loadCycle)
                     >
                       <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </BaseSelect>
-                    <button class="action-btn action-delay" @click.stop="openDelayModal(task.cycle_task_id)">Record delay</button>
+                    <button class="action-btn action-delay" @click.stop="openShiftModal(task)">Reschedule</button>
+                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div v-if="todayTasks.length > 0">
-              <div class="timeline-label">Today</div>
-              <div v-for="task in todayTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
-                <div class="tc-row">
-                  <div class="tc-left">
-                    <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
-                    <div class="tc-dates">Due {{ formatDate(task.calculated_start_date) }}</div>
-                  </div>
-		  <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="upcomingTasks.length > 0">
-              <div class="timeline-label">Upcoming</div>
-              <div v-for="task in upcomingTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
+            <div v-if="pendingTasks.length > 0">
+              <div class="timeline-label">Pending</div>
+              <div v-for="task in pendingTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
                 <div class="tc-row">
                   <div class="tc-left">
                     <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
                     <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
+                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
+                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
+                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
 		  <div class="tc-right" @click.stop>
                     <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
@@ -352,6 +829,33 @@ onMounted(loadCycle)
                     >
                       <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </BaseSelect>
+                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="inProgressTasks.length > 0">
+              <div class="timeline-label">In Progress</div>
+              <div v-for="task in inProgressTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
+                <div class="tc-row">
+                  <div class="tc-left">
+                    <div class="tc-name">{{ task.task_name }}<span v-if="task.is_mandatory" class="tc-mandatory">MANDATORY</span><span v-if="task.is_fixed_date" class="tc-fixed">FIXED DATE</span></div>
+                    <div class="tc-dates">{{ formatDate(task.calculated_start_date) }} → {{ formatDate(task.calculated_end_date) }}</div>
+                    <div v-if="dependencyForTask(task)" class="tc-dep">Depends on: {{ dependencyForTask(task).task_name }}</div>
+                    <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
+                    <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
+                  </div>
+		  <div class="tc-right" @click.stop>
+                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <BaseSelect
+                      class="status-select"
+                      :model-value="task.status"
+                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
+                    >
+                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                    </BaseSelect>
+                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
@@ -388,7 +892,7 @@ onMounted(loadCycle)
                 </div>
               </div>
             </div>
-          
+
             <div v-if="tasks.length === 0 && activities.length === 0" class="empty-section">No tasks or activities in this cycle yet.</div>
           </div>
 
@@ -396,10 +900,10 @@ onMounted(loadCycle)
             <div class="side-card">
               <div class="side-card-title">Status summary</div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ tasks.filter(t => t.status === 'in_progress').length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ inProgressTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:#F59E0B;"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--border);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ tasks.filter(t => t.status === 'pending').length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--border);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
             </div>
             <div class="side-card">
               <div class="side-card-title">Cycle info</div>
@@ -424,21 +928,118 @@ onMounted(loadCycle)
       <p>Are you sure you want to shut down this cycle? This cannot be undone.</p>
     </BaseModal>
 
-    <!-- RECORD DELAY MODAL -->
+    <!-- RESCHEDULE (SHIFT) MODAL -->
     <BaseModal
-      v-model="delayModal.open"
-      title="Record delay"
-      confirm-label="Save delay"
-      :loading="delayLoading"
-      @confirm="confirmRecordDelay"
+      v-model="shiftModal.open"
+      title="Reschedule task"
+      :confirm-label="shiftModal.preview ? 'Apply change' : 'Preview change'"
+      :loading="shiftLoading || shiftPreviewLoading"
+      :confirm-disabled="shiftModal.preview && !canApplyShift"
+      @confirm="shiftModal.preview ? confirmShift() : runShiftPreview()"
     >
-      <BaseInput
-        v-model="delayModal.days"
-        type="number"
-        label="Delay (days)"
-        placeholder="e.g. 3"
-        hint="Downstream dependent tasks will be recalculated automatically."
-      />
+      <div class="shift-modal-body">
+        <div class="shift-mode-tabs">
+          <button type="button" class="shift-mode-tab" :class="{ active: shiftModal.mode === 'delay' }" @click="shiftModal.mode = 'delay'; shiftModal.preview = null">Delay by days</button>
+          <button type="button" class="shift-mode-tab" :class="{ active: shiftModal.mode === 'date' }" @click="shiftModal.mode = 'date'; shiftModal.preview = null">Pick new end date</button>
+        </div>
+
+        <BaseInput
+          v-if="shiftModal.mode === 'delay'"
+          v-model="shiftModal.days"
+          type="number"
+          label="Delay (days)"
+          placeholder="e.g. 3"
+          :max="shiftModal.scope === 'single' ? shiftModal.maxSafeDelayDays : undefined"
+          :hint="shiftModal.scope === 'single' && shiftModal.maxSafeDelayDays !== null
+            ? `Up to ${shiftModal.maxSafeDelayDays} day${shiftModal.maxSafeDelayDays !== 1 ? 's' : ''} is safe without moving anything else. More requires cascade scope.`
+            : 'How many days to push this task back.'"
+          @update:model-value="shiftModal.preview = null"
+        />
+        <BaseDatePicker
+          v-else
+          v-model="shiftModal.newDate"
+          label="New end date"
+          @update:model-value="shiftModal.preview = null"
+        />
+
+        <BaseSelect v-model="shiftModal.scope" label="Scope" @update:model-value="shiftModal.preview = null">
+          <option value="single" :disabled="shiftModal.hasDependents">Only this task</option>
+          <option value="cascade">This task and everything downstream of it</option>
+        </BaseSelect>
+        <p v-if="shiftModal.hasDependents" class="shift-scope-note">
+          Other tasks depend on this one, so it can only be rescheduled together with everything
+          downstream of it — moving it alone would leave the dependency out of sync with the actual dates.
+        </p>
+
+        <label class="check-item">
+          <input type="checkbox" v-model="shiftModal.overrideFixed" />
+          <span>Move fixed-date tasks too if this task (or anything downstream of it) is fixed</span>
+        </label>
+
+        <div v-if="shiftModal.preview" class="shift-preview-box">
+          <div class="shift-preview-title">Preview</div>
+          <div class="shift-preview-row">
+            New dates: {{ formatDate(shiftModal.preview.planned_start_date) }} → {{ formatDate(shiftModal.preview.planned_end_date) }}
+          </div>
+          <div v-if="shiftModal.preview.upstream_conflict" class="shift-preview-warning">
+            {{ shiftModal.preview.upstream_conflict.message }}
+          </div>
+          <div v-else-if="shiftModal.scope === 'single' && !shiftModal.preview.single_possible" class="shift-preview-warning">
+            Can't shift this task alone{{ shiftModal.preview.single_blocking_task ? ` — "${shiftModal.preview.single_blocking_task}" would need to move too.` : '.' }} Switch to cascade scope.
+          </div>
+          <div v-else-if="shiftModal.scope === 'cascade' && !shiftModal.preview.cascade_possible && !(cascadeOnlyBlockedByFixedDate && shiftModal.overrideFixed)" class="shift-preview-warning">
+            {{ cascadeBlockedMessage }}
+          </div>
+          <div v-else class="shift-preview-row" style="color: var(--success);">
+            This change can be applied.
+          </div>
+        </div>
+      </div>
+    </BaseModal>
+
+    <!-- NOTE EDITOR MODAL (tasks and activities) -->
+    <BaseModal
+      v-model="noteModal.open"
+      :title="noteModal.kind === 'task' ? 'Task note' : 'Activity note'"
+      confirm-label="Save note"
+      :loading="noteLoading"
+      @confirm="saveNote"
+    >
+      <label class="field-label">Note</label>
+      <textarea v-model="noteModal.text" class="field-textarea" rows="4" placeholder="Add a note..."></textarea>
+      <p class="modal-hint">Leaving this empty and saving removes the note.</p>
+    </BaseModal>
+
+    <!-- ACTIVITY DATE EDIT MODAL -->
+    <BaseModal
+      v-model="activityEditModal.open"
+      title="Edit activity dates"
+      confirm-label="Save dates"
+      :loading="activityEditLoading"
+      @confirm="saveActivityEdit"
+    >
+      <p class="modal-hint">Every task still anchored to this activity must fit inside the new range — tasks are never moved to make room, the change is rejected instead.</p>
+      <BaseDatePicker v-model="activityEditModal.start" label="Start date" />
+      <BaseDatePicker v-model="activityEditModal.end" label="End date" />
+    </BaseModal>
+
+    <!-- UNRESOLVED PREREQUISITES MODAL -->
+    <BaseModal
+      v-model="prereqModal.open"
+      title="Resolve prerequisites first"
+      confirm-label="Resolve & complete"
+      :loading="prereqLoading"
+      @confirm="confirmPrereqResolution"
+    >
+      <p class="modal-hint">This task depends on tasks that aren't finished yet. Resolve each one below before it can be marked completed.</p>
+      <div v-for="t in prereqModal.unresolved" :key="t.cycle_task_id" class="prereq-row">
+        <span class="prereq-name">{{ t.task_name }}</span>
+        <BaseSelect v-model="prereqModal.choices[t.cycle_task_id]">
+          <option :value="undefined" disabled>Choose...</option>
+          <option value="completed">Completed</option>
+          <option value="skipped">Skipped</option>
+        </BaseSelect>
+      </div>
     </BaseModal>
 
     <!-- TASK DETAIL MODAL -->
@@ -466,6 +1067,21 @@ onMounted(loadCycle)
         <div class="task-detail-row">
           <span class="task-detail-label">Reminders</span>
           <span class="task-detail-value">{{ formatTaskReminders(taskDetailModal.task.reminder_lead_days) }}</span>
+        </div>
+        <div v-if="dependencyForTask(taskDetailModal.task)" class="task-detail-row">
+          <span class="task-detail-label">Depends on</span>
+          <span class="task-detail-value">{{ dependencyForTask(taskDetailModal.task).task_name }}</span>
+        </div>
+        <div v-if="activityForTask(taskDetailModal.task)" class="task-detail-row">
+          <span class="task-detail-label">Activity</span>
+          <span class="task-detail-value">{{ activityForTask(taskDetailModal.task).activity_name }}</span>
+        </div>
+
+        <div v-if="tagsForTask(taskDetailModal.task).length > 0" class="task-detail-block">
+          <div class="task-detail-block-label">Tags</div>
+          <div class="tc-tag-row">
+            <span v-for="tag in tagsForTask(taskDetailModal.task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span>
+          </div>
         </div>
 
         <div v-if="taskDetailModal.task.note_text" class="task-detail-block">
@@ -529,6 +1145,20 @@ onMounted(loadCycle)
 .alert-title { font-size: var(--font-body); font-weight: 600; color: #B91C1C; margin-bottom: 2px; }
 .alert-desc { font-size: var(--font-label); color: #991B1B; }
 
+/* ── VIEW TOGGLE ── */
+.view-toggle-bar { display: flex; align-items: center; }
+.view-toggle { display: flex; align-items: center; gap: 4px; background: var(--bg-page); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 3px; }
+.view-toggle-label { font-size: var(--font-hint); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 6px 0 4px; }
+.view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border: none; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: var(--font-label); font-weight: 500; font-family: var(--font-main); cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast); }
+.view-toggle-btn.active { background: var(--white); color: var(--violet); box-shadow: var(--shadow-sm); }
+.view-toggle-btn:hover:not(.active) { color: var(--text-primary); }
+.view-toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── GANTT CARD (cycle view) ── */
+.gantt-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); overflow: hidden; min-height: 420px; }
+.gantt-header { padding: 14px 18px; font-size: var(--font-label); font-weight: 600; color: var(--text-primary); border-bottom: 1px solid var(--border-light); }
+.gantt-empty { padding: 40px 18px; font-size: var(--font-label); color: var(--text-muted); text-align: center; }
+
 /* ── LAYOUT ── */
 .two-col { display: flex; gap: 20px; align-items: flex-start; }
 .col-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -551,6 +1181,11 @@ onMounted(loadCycle)
 .tc-name { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); margin-bottom: 3px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .tc-dates { font-size: var(--font-label); color: var(--text-secondary); }
 .tc-note { font-size: var(--font-label); color: var(--text-secondary); margin-top: 4px; }
+.tc-dep { font-size: var(--font-upper); color: var(--text-muted); margin-top: 4px; }
+.tc-activity-badge { font-size: var(--font-upper); color: var(--violet); margin-top: 3px; font-weight: 500; }
+.tc-tag-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.tc-tag-chip { font-size: var(--font-hint); font-weight: 500; background: var(--bg-page); color: var(--text-secondary); padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border-light); }
+.tc-tag-chip-violet { background: var(--violet-mid); color: var(--violet-dark); border-color: #DDD6FE; }
 .tc-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
 .tc-mandatory { font-size: var(--font-hint); font-weight: 700; color: var(--danger); }
 .tc-fixed { font-size: var(--font-hint); font-weight: 700; color: #92400E; }
@@ -601,10 +1236,42 @@ onMounted(loadCycle)
 /* ── ACTIVITY CARD ── */
 .activity-card { background: var(--violet-bg); border: 1px solid #DDD6FE; border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; }
 .act-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-.act-name { font-size: var(--font-body); font-weight: 600; color: var(--violet); }
+.act-row-clickable { cursor: pointer; }
+.act-name { font-size: var(--font-body); font-weight: 600; color: var(--violet); display: flex; align-items: center; gap: 6px; }
+.act-chevron { width: 14px; height: 14px; flex-shrink: 0; transition: transform 0.15s ease; }
+.act-chevron-open { transform: rotate(90deg); }
+.act-task-count { font-size: var(--font-hint); font-weight: 500; color: var(--violet-dark); opacity: 0.75; margin-left: 4px; }
 .act-dates { font-size: var(--font-label); color: var(--violet-dark); }
 .act-note { font-size: var(--font-label); color: var(--violet-dark); margin-top: 4px; opacity: 0.8; }
+.act-actions { display: flex; gap: 8px; margin-top: 8px; }
+.act-task-list { margin-top: 10px; padding-top: 10px; border-top: 1px solid #DDD6FE; display: flex; flex-direction: column; gap: 4px; }
+.act-task-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; background: var(--white); border-radius: 6px; cursor: pointer; }
+.act-task-row:hover { box-shadow: var(--shadow-sm); }
+.act-task-name { font-size: var(--font-label); color: var(--text-primary); font-weight: 500; }
+.act-task-empty { margin-top: 10px; padding-top: 10px; border-top: 1px solid #DDD6FE; font-size: var(--font-label); color: var(--violet-dark); opacity: 0.7; }
 .empty-section { font-size: var(--font-body); color: var(--text-muted); padding: 24px 0; text-align: center; }
+
+/* ── SHIFT / NOTE / ACTIVITY-EDIT / PREREQ MODALS ── */
+.shift-modal-body { display: flex; flex-direction: column; gap: 14px; }
+.shift-mode-tabs { display: flex; gap: 6px; }
+.shift-mode-tab { flex: 1; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); background: var(--white); color: var(--text-secondary); font-size: var(--font-label); font-weight: 500; font-family: var(--font-main); cursor: pointer; }
+.shift-mode-tab.active { background: var(--violet-bg); color: var(--violet); border-color: #DDD6FE; }
+.shift-preview-box { background: var(--bg-page); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 10px 14px; }
+.shift-preview-title { font-size: var(--font-hint); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 6px; }
+.shift-preview-row { font-size: var(--font-label); color: var(--text-primary); padding: 2px 0; }
+.shift-preview-warning { margin-top: 6px; font-size: var(--font-label); color: #92400E; }
+.shift-scope-note { font-size: var(--font-label); color: var(--text-muted); margin: -4px 0 0; line-height: 1.5; }
+
+.field-label { display: block; font-size: var(--font-label); font-weight: 500; color: var(--text-primary); margin-bottom: 6px; }
+.field-textarea { width: 100%; padding: 9px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-md); font-family: var(--font-main); font-size: var(--font-label); color: var(--text-primary); resize: vertical; box-sizing: border-box; }
+.field-textarea:focus { outline: none; border-color: var(--violet); }
+.modal-hint { font-size: var(--font-label); color: var(--text-muted); margin: 6px 0 14px; line-height: 1.5; }
+
+.prereq-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-light); }
+.prereq-row:last-child { border-bottom: none; }
+.prereq-name { font-size: var(--font-label); font-weight: 500; color: var(--text-primary); }
+
+.check-item { display: flex; align-items: center; gap: 8px; font-size: var(--font-label); color: var(--text-primary); cursor: pointer; }
 
 /* ── SIDE CARDS ── */
 .side-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 14px 16px; }

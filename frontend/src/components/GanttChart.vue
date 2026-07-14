@@ -1,10 +1,26 @@
 <!-- ============================================
-   RECURRA — SHARED GANTT / TIMELINE CHART
+   RECURRA — SHARED GANTT / TIMELINE CHART (PREVIEW)
    /frontend/src/components/GanttChart.vue
+
+   Used for lightweight timeline PREVIEWS: template detail page and
+   the template create/edit wizard's live preview. For the full
+   interactive Gantt shown on a cycle after it's created, see
+   CycleGanttChart.vue instead — that one has grouping, status
+   colors, and click-to-inspect; this one stays a simple, fast
+   read-only preview on purpose.
 
    Renders task & activity bars on a day-based horizontal axis,
    at a fixed pixel-per-day scale so long templates produce a wide
    chart you scroll through, at a constant, always-readable scale.
+
+   Dependency arrows: each task bar can carry a dependsOnIndex
+   pointing at another entry in the SAME taskBars array (its index
+   after whatever ordering the caller already applied). An elbow
+   connector with an arrowhead is drawn from the right edge of the
+   prerequisite bar to the left edge of the dependent bar, the
+   standard "normal Gantt chart" dependency line. depName is kept
+   purely for the small text label under the bar — the arrow itself
+   is driven entirely by dependsOnIndex + row geometry.
 
    IMPORTANT layout note: this uses two separate direct children of
    the scrolling container — a sticky "sidebar" column (row labels)
@@ -27,7 +43,9 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps({
-  // [{ name, start, end, isMandatory, isFixed, depName }]
+  // [{ name, start, end, isMandatory, isFixed, depName, dependsOnIndex }]
+  // dependsOnIndex: index of the prerequisite bar within THIS SAME
+  // taskBars array (after sorting), or null/undefined for none.
   taskBars: { type: Array, default: () => [] },
   // [{ name, start, end }]
   activityBars: { type: Array, default: () => [] },
@@ -41,6 +59,7 @@ const props = defineProps({
 const ROW_HEIGHT = 24  // tick row, section row
 const ACTIVITY_ROW_HEIGHT = 36
 const TASK_ROW_HEIGHT = 46 // extra room for an optional dependency line
+const BAR_CENTER_Y = 18 // vertical center of a bar within its row (top:3px, height:30px)
 
 const safeMaxDay = computed(() => Math.max(props.maxDay, 1))
 const totalWidth = computed(() => safeMaxDay.value * props.pxPerDay)
@@ -91,6 +110,85 @@ const chartStyle = computed(() => ({
   '--timeline-tick-width': `${tickInterval.value * props.pxPerDay}px`,
   '--timeline-day-width': `${props.pxPerDay}px`,
 }))
+
+// ── DEPENDENCY ARROW GEOMETRY ──────────────────────────────
+const taskSectionTop = computed(() => {
+  let top = ROW_HEIGHT
+  if (props.activityBars.length > 0) {
+    top += ROW_HEIGHT + props.activityBars.length * ACTIVITY_ROW_HEIGHT
+  }
+  if (props.taskBars.length > 0) {
+    top += ROW_HEIGHT
+  }
+  return top
+})
+
+const chartHeight = computed(() => taskSectionTop.value + props.taskBars.length * TASK_ROW_HEIGHT)
+
+function barCenterY(index) {
+  return taskSectionTop.value + index * TASK_ROW_HEIGHT + BAR_CENTER_Y
+}
+
+function barRight(bar) {
+  return Math.max(bar.end * props.pxPerDay, bar.start * props.pxPerDay + 14)
+}
+function barLeft(bar) {
+  return bar.start * props.pxPerDay
+}
+
+// One elbow connector per dependent bar: right out of the
+// prerequisite's end, across/down (or up) to the dependent's row,
+// then right into its start. Falls back to a routed-below connector
+// if a task starts before its prerequisite ends (shouldn't normally
+// happen — the backend rejects that — but never draw something
+// broken if it does).
+const dependencyArrows = computed(() => {
+  const arrows = []
+  props.taskBars.forEach((bar, i) => {
+    const depIndex = bar.dependsOnIndex
+    if (depIndex === null || depIndex === undefined) return
+    const depBar = props.taskBars[depIndex]
+    if (!depBar) return
+
+    const fromX = barRight(depBar)
+    const fromY = barCenterY(depIndex)
+    const toX = barLeft(bar)
+    const toY = barCenterY(i)
+
+    let path
+    if (fromY === toY) {
+      path = `M ${fromX} ${fromY} L ${Math.max(toX - 6, fromX)} ${toY}`
+    } else if (toX > fromX) {
+      // Clamp the elbow so it always sits strictly between fromX and
+      // toX, even when the gap is very small (dependent tasks are
+      // often scheduled right up against each other).
+      const gap = toX - fromX
+      const elbowX = fromX + Math.min(10, gap / 2)
+      // The arrowhead marker's rotation (orient="auto-start-reverse")
+      // is derived from the direction of THIS final segment. It must
+      // always be a real, positive-length horizontal stretch —
+      // clamping only with Math.max(toX - 6, elbowX) let it collapse
+      // to zero (or invert) whenever the gap was small, leaving the
+      // marker's orientation undefined and rendering it bent/twisted
+      // instead of pointing cleanly rightward into the bar.
+      const endX = Math.max(toX - 6, elbowX + 4)
+      path = `M ${fromX} ${fromY} L ${elbowX} ${fromY} L ${elbowX} ${toY} L ${endX} ${toY}`
+    } else {
+      // Loops under intervening rows to approach the target from the
+      // left. The final approach into the bar must also be a real
+      // horizontal segment for the same reason as above — ending on
+      // a vertical segment (straight from the dip row up/down into
+      // the target row) left the arrowhead oriented vertically.
+      const dipY = Math.max(fromY, toY) + TASK_ROW_HEIGHT / 2 - 4
+      const approachX = toX - 6
+      const preApproachX = approachX - 10
+      path = `M ${fromX} ${fromY} L ${fromX + 10} ${fromY} L ${fromX + 10} ${dipY} L ${preApproachX} ${dipY} L ${preApproachX} ${toY} L ${approachX} ${toY}`
+    }
+
+    arrows.push({ id: `dep-arrow-${i}`, path })
+  })
+  return arrows
+})
 </script>
 
 <template>
@@ -178,6 +276,32 @@ const chartStyle = computed(() => ({
             after {{ bar.depName }}
           </div>
         </div>
+
+        <!-- DEPENDENCY ARROWS: one continuous SVG overlay across the
+             whole chart height, drawn above the bars, standard
+             elbow-connector-with-arrowhead Gantt notation. -->
+        <svg
+          v-if="dependencyArrows.length > 0"
+          class="gantt-dep-arrows"
+          :width="totalWidth"
+          :height="chartHeight"
+          :viewBox="`0 0 ${totalWidth} ${chartHeight}`"
+        >
+          <defs>
+            <marker id="gantt-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--violet)" />
+            </marker>
+          </defs>
+          <path
+            v-for="arrow in dependencyArrows"
+            :key="arrow.id"
+            :d="arrow.path"
+            fill="none"
+            stroke="var(--violet)"
+            stroke-width="1.75"
+            marker-end="url(#gantt-arrowhead)"
+          />
+        </svg>
       </div>
 
     </div>
@@ -188,6 +312,10 @@ const chartStyle = computed(() => ({
       <span class="legend-item"><span class="legend-dot dot-task"></span>Task</span>
       <span class="legend-item"><span class="legend-dot dot-mandatory"></span>Mandatory</span>
       <span class="legend-item"><span class="legend-dot dot-fixed"></span>Fixed date</span>
+      <span v-if="taskBars.some(b => b.dependsOnIndex !== null && b.dependsOnIndex !== undefined)" class="legend-item">
+        <svg width="18" height="10" viewBox="0 0 18 10"><path d="M0 5h12" stroke="var(--violet)" stroke-width="1.75" fill="none"/><path d="M11,1 L17,5 L11,9 z" fill="var(--violet)"/></svg>
+        Dependency
+      </span>
     </div>
 
   </div>
@@ -199,9 +327,6 @@ const chartStyle = computed(() => ({
   flex-direction: column;
 }
 
-/* This is the actual scrolling element. Sidebar and content MUST
-   stay direct children of THIS, never nested in an extra wrapper —
-   see the note in the script block above. */
 .gantt-scroll-row {
   display: flex;
   align-items: flex-start;
@@ -209,7 +334,6 @@ const chartStyle = computed(() => ({
   overflow-x: auto;
 }
 
-/* Sticky sidebar MUST stay a direct child of .gantt-scroll-row. */
 .gantt-sidebar {
   position: sticky;
   left: 0;
@@ -257,9 +381,6 @@ const chartStyle = computed(() => ({
   position: relative;
 }
 
-/* Two layered gridlines: a faint one every single day (so you can
-   always see exactly where "day N" is, even between labeled
-   ticks), and a slightly stronger one at the labeled interval. */
 .gantt-grid {
   background-image:
     repeating-linear-gradient(to right, rgba(15, 23, 42, 0.055) 0, rgba(15, 23, 42, 0.055) 1px, transparent 1px, transparent var(--timeline-day-width)),
@@ -341,6 +462,15 @@ const chartStyle = computed(() => ({
   white-space: nowrap;
 }
 .gantt-dep-row svg { width: 10px; height: 10px; }
+
+.gantt-dep-arrows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: visible;
+}
 
 .gantt-legend {
   display: flex;

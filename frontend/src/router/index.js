@@ -16,6 +16,7 @@ import pinia from '../stores'
 import TemplatesView from '../views/TemplatesView.vue'
 import TemplateTasksView from '../views/TemplateTasksView.vue'
 import TemplateActivitiesView from '../views/TemplateActivitiesView.vue'
+import TagsView from '../views/TagsView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -116,6 +117,12 @@ const router = createRouter({
       path: '/templates/:id/edit',
       name: 'template-edit',
       component: TemplateCreateView,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/tags',
+      name: 'tags',
+      component: TagsView,
       meta: { requiresAuth: true },
     },
     {

@@ -20,7 +20,9 @@ class CycleInstance(models.Model):
     )
     template = models.ForeignKey(
         Template,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="cycle_instances"
     )
     cycle_name = models.CharField(max_length=100)
@@ -49,7 +51,9 @@ class CycleTask(models.Model):
     )
     template_task = models.ForeignKey(
         TemplateTask,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="cycle_tasks"
     )
     cycle_activity = models.ForeignKey(
@@ -85,7 +89,9 @@ class CycleActivity(models.Model):
     )
     template_activity = models.ForeignKey(
         TemplateActivity,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="cycle_activities"
     )
     activity_name = models.CharField(max_length=100)
