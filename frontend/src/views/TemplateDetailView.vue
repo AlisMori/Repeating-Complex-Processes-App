@@ -1,15 +1,15 @@
 <!-- /frontend/src/views/TemplateDetailView.vue -->
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import GanttChart from '@/components/GanttChart.vue'
 import { useToastStore } from '@/stores/toast'
-import { getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview, duplicateTemplate, deleteTemplate, getTemplateVersions, makeCurrentVersion } from '@/api/templates'
+import { getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview, duplicateTemplate, deleteTemplate, getTemplateVersions, makeCurrentVersion, getTemplateTaskTags, getTemplateActivityTags, getTags } from '@/api/templates'
 import api from '@/api/axios'
 
 const route = useRoute()
@@ -24,27 +24,41 @@ const timeline = ref(null)
 const loading = ref(true)
 const error = ref('')
 const deleteModalOpen = ref(false)
+const taskTagLinks = ref([])
+const activityTagLinks = ref([])
+const allTags = ref([])
+const detailModal = ref({ open: false, type: null, item: null })
 const deleteLoading = ref(false)
-
-const templateId = route.params.id
-
 const versions = ref([])
 const makeCurrentLoading = ref(false)
+
+const templateId = computed(() => route.params.id)
 
 async function loadTemplate() {
   loading.value = true
   error.value = ''
   try {
-    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes] = await Promise.all([
-      getTemplate(templateId),
-      getTemplateTasks(templateId),
-      getTemplateActivities(templateId),
+    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, versionsRes, taskTagsRes, activityTagsRes, taskTagPoolRes, activityTagPoolRes] = await Promise.all([
+      getTemplate(templateId.value),
+      getTemplateTasks(templateId.value),
+      getTemplateActivities(templateId.value),
       api.get('/task-dependencies/'),
-      getTemplateTimelinePreview(templateId),
+      getTemplateTimelinePreview(templateId.value),
+      getTemplateVersions(templateId.value),
+      getTemplateTaskTags(),
+      getTemplateActivityTags(),
+      getTags('task'),
+      getTags('activity'),
     ])
     template.value = tplRes.data
+    versions.value = Array.isArray(versionsRes.data) ? versionsRes.data : (versionsRes.data.results || [])
     tasks.value = Array.isArray(tasksRes.data) ? tasksRes.data : (tasksRes.data.results || [])
     activities.value = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
+    taskTagLinks.value = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
+    activityTagLinks.value = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
+    const taskTagPool = Array.isArray(taskTagPoolRes.data) ? taskTagPoolRes.data : (taskTagPoolRes.data.results || [])
+    const activityTagPool = Array.isArray(activityTagPoolRes.data) ? activityTagPoolRes.data : (activityTagPoolRes.data.results || [])
+    allTags.value = [...taskTagPool, ...activityTagPool]
     // Filter deps that belong to this template's tasks
     const taskIds = new Set(tasks.value.map(t => t.template_task_id))
     const allDeps = Array.isArray(depsRes.data) ? depsRes.data : (depsRes.data.results || [])
@@ -70,15 +84,58 @@ function formatReminders(val) {
   return val === 0 ? 'On the day' : `${val} days before`
 }
 
+function tagNamesForTask(taskId) {
+  const tagIds = taskTagLinks.value.filter(l => l.template_task === taskId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+function tagNamesForActivity(activityId) {
+  const tagIds = activityTagLinks.value.filter(l => l.template_activity === activityId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+// One ordered list — each activity immediately followed by the tasks
+// linked to it (grouped by relationship, not by type), then any
+// tasks with no linked activity at the end. Mirrors exactly how
+// GanttChart.vue groups the same data on the right.
+const groupedItems = computed(() => {
+  const result = []
+  const linkedTaskIds = new Set()
+
+  for (const act of activities.value) {
+    result.push({ type: 'activity', item: act })
+    const linkedTasks = tasks.value
+      .filter(t => t.template_activity === act.template_activity_id)
+      .sort((a, b) => a.day_offset - b.day_offset)
+    for (const t of linkedTasks) {
+      result.push({ type: 'task', item: t, linked: true })
+      linkedTaskIds.add(t.template_task_id)
+    }
+  }
+
+  const unlinkedTasks = tasks.value
+    .filter(t => !linkedTaskIds.has(t.template_task_id))
+    .sort((a, b) => a.day_offset - b.day_offset)
+  for (const t of unlinkedTasks) {
+    result.push({ type: 'task', item: t, linked: false })
+  }
+
+  return result
+})
+
+function openDetail(type, item) {
+  detailModal.value = { open: true, type, item }
+}
+
 function onSwitchVersion(newId) {
-  if (String(newId) === String(templateId)) return
+  if (String(newId) === String(templateId.value)) return
   router.push({ name: 'template-detail', params: { id: newId } })
 }
 
 async function onMakeCurrent() {
   makeCurrentLoading.value = true
   try {
-    await makeCurrentVersion(templateId)
+    await makeCurrentVersion(templateId.value)
     toast.success('This version is now current.')
     await loadTemplate()
   } catch {
@@ -90,7 +147,7 @@ async function onMakeCurrent() {
 
 async function onDuplicate() {
   try {
-    await duplicateTemplate(templateId)
+    await duplicateTemplate(templateId.value)
     toast.success('Template duplicated.')
     router.push({ name: 'templates' })
   } catch { toast.error('Failed to duplicate template.') }
@@ -99,7 +156,7 @@ async function onDuplicate() {
 async function confirmDelete() {
   deleteLoading.value = true
   try {
-    await deleteTemplate(templateId)
+    await deleteTemplate(templateId.value)
     toast.success('Template deleted.')
     router.push({ name: 'templates' })
   } catch {
@@ -130,8 +187,10 @@ const ganttData = computed(() => {
       isMandatory: b.is_mandatory,
       isFixed: b.is_fixed_date,
       depName: b.dep_name,
+      activityId: b.template_activity_id,
     })),
     activityBars: timeline.value.activity_bars.map(b => ({
+      id: b.template_activity_id,
       name: b.name,
       start: b.start,
       end: b.end,
@@ -139,6 +198,7 @@ const ganttData = computed(() => {
     maxDay: timeline.value.max_day,
   }
 })
+watch(() => route.params.id, loadTemplate)
 
 onMounted(loadTemplate)
 </script>
@@ -225,66 +285,66 @@ onMounted(loadTemplate)
           <!-- LEFT -->
           <div class="col-main">
 
-            <!-- TASKS -->
-            <div class="section-card" v-if="tasks.length > 0">
+            <!-- GROUPED: each activity followed by its linked tasks, then any unlinked tasks -->
+            <div class="section-card" v-if="groupedItems.length > 0">
               <div class="section-header">
-                <div class="section-title">Tasks</div>
-                <span class="section-count">{{ tasks.length }}</span>
+                <div class="section-title">Tasks & Activities</div>
+                <span class="section-count">{{ tasks.length + activities.length }}</span>
               </div>
               <div class="task-list">
-                <div v-for="task in tasks" :key="task.template_task_id" class="task-row">
-                  <div class="task-row-left">
-                    <div class="task-day-badge">Day {{ task.day_offset }}</div>
-                    <div>
-                      <div class="task-name">
-                        {{ task.task_name }}
-                        <span v-if="task.is_mandatory" class="chip chip-mandatory">MANDATORY</span>
-                        <span v-if="task.is_fixed_date" class="chip chip-fixed">FIXED DATE</span>
-                      </div>
-                      <div class="task-meta">
-                        Duration: {{ task.duration_days || 1 }} day{{ task.duration_days > 1 ? 's' : '' }}
-                        <span v-if="task.reminder_lead_days"> · Reminder: {{ formatReminders(task.reminder_lead_days) }}</span>
-                      </div>
-                      <div v-if="task.description" class="task-desc">{{ task.description }}</div>
-                      <div v-if="dependencies.find(d => d.task === task.template_task_id)" class="task-dep">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
-                          <path d="M18 9a9 9 0 0 1-9 9"/>
-                        </svg>
-                        Depends on: {{ getDependencyName(dependencies.find(d => d.task === task.template_task_id).depends_on_task) }}
+                <template v-for="row in groupedItems" :key="(row.type === 'activity' ? 'a-' : 't-') + (row.item.template_activity_id || row.item.template_task_id)">
+
+                  <div
+                    v-if="row.type === 'activity'"
+                    class="task-row"
+                    @click="openDetail('activity', row.item)"
+                  >
+                    <div class="task-row-left">
+                      <div class="task-day-badge activity-badge">Day {{ row.item.start_offset_days }}–{{ row.item.end_offset_days }}</div>
+                      <div>
+                        <div class="task-name">{{ row.item.activity_name }}</div>
+                        <div class="task-meta">Spans {{ row.item.end_offset_days - row.item.start_offset_days }} days</div>
+                        <div v-if="row.item.description" class="task-desc">{{ row.item.description }}</div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
 
-            <div v-if="tasks.length === 0" class="empty-card">
-              No tasks defined. Click Edit template to add tasks.
-            </div>
-
-            <!-- ACTIVITIES -->
-            <div class="section-card" v-if="activities.length > 0">
-              <div class="section-header">
-                <div class="section-title">Activities</div>
-                <span class="section-count">{{ activities.length }}</span>
-              </div>
-              <div class="task-list">
-                <div v-for="act in activities" :key="act.template_activity_id" class="task-row">
-                  <div class="task-row-left">
-                    <div class="task-day-badge activity-badge">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</div>
-                    <div>
-                      <div class="task-name">{{ act.activity_name }}</div>
-                      <div class="task-meta">Spans {{ act.end_offset_days - act.start_offset_days }} days</div>
-                      <div v-if="act.description" class="task-desc">{{ act.description }}</div>
+                  <div
+                    v-else
+                    class="task-row"
+                    :class="{ 'task-row-linked': row.linked }"
+                    @click="openDetail('task', row.item)"
+                  >
+                    <div class="task-row-left">
+                      <div class="task-day-badge">Day {{ row.item.day_offset }}</div>
+                      <div>
+                        <div class="task-name">
+                          {{ row.item.task_name }}
+                          <span v-if="row.item.is_mandatory" class="chip chip-mandatory">MANDATORY</span>
+                          <span v-if="row.item.is_fixed_date" class="chip chip-fixed">FIXED DATE</span>
+                        </div>
+                        <div class="task-meta">
+                          Duration: {{ row.item.duration_days || 1 }} day{{ row.item.duration_days > 1 ? 's' : '' }}
+                          <span v-if="row.item.reminder_lead_days"> · Reminder: {{ formatReminders(row.item.reminder_lead_days) }}</span>
+                        </div>
+                        <div v-if="row.item.description" class="task-desc">{{ row.item.description }}</div>
+                        <div v-if="dependencies.find(d => d.task === row.item.template_task_id)" class="task-dep">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                            <path d="M18 9a9 9 0 0 1-9 9"/>
+                          </svg>
+                          Depends on: {{ getDependencyName(dependencies.find(d => d.task === row.item.template_task_id).depends_on_task) }}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+
+                </template>
               </div>
             </div>
 
-            <div v-if="activities.length === 0 && tasks.length > 0" class="empty-card">
-              No activities defined.
+            <div v-if="groupedItems.length === 0" class="empty-card">
+              No tasks or activities defined. Click Edit template to add some.
             </div>
 
           </div>
@@ -317,6 +377,71 @@ onMounted(loadTemplate)
       @confirm="confirmDelete"
     >
       <p>Are you sure you want to delete this template? This cannot be undone.</p>
+    </BaseModal>
+
+    <!-- TASK / ACTIVITY DETAIL MODAL -->
+    <BaseModal
+      v-model="detailModal.open"
+      :title="detailModal.type === 'task' ? detailModal.item?.task_name : detailModal.item?.activity_name"
+    >
+      <div v-if="detailModal.item" class="detail-view">
+
+        <template v-if="detailModal.type === 'task'">
+          <div class="detail-row"><span class="detail-label">Day offset</span><span class="detail-value">Day {{ detailModal.item.day_offset }}</span></div>
+          <div class="detail-row"><span class="detail-label">Duration</span><span class="detail-value">{{ detailModal.item.duration_days || 1 }} day{{ detailModal.item.duration_days > 1 ? 's' : '' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Mandatory</span><span class="detail-value">{{ detailModal.item.is_mandatory ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Fixed date</span><span class="detail-value">{{ detailModal.item.is_fixed_date ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Reminders</span><span class="detail-value">{{ formatReminders(detailModal.item.reminder_lead_days) }}</span></div>
+          <div v-if="activities.find(a => a.template_activity_id === detailModal.item.template_activity)" class="detail-row">
+            <span class="detail-label">Linked activity</span>
+            <span class="detail-value">{{ activities.find(a => a.template_activity_id === detailModal.item.template_activity).activity_name }}</span>
+          </div>
+          <div v-if="dependencies.find(d => d.task === detailModal.item.template_task_id)" class="detail-row">
+            <span class="detail-label">Depends on</span>
+            <span class="detail-value">{{ getDependencyName(dependencies.find(d => d.task === detailModal.item.template_task_id).depends_on_task) }}</span>
+          </div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForTask(detailModal.item.template_task_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForTask(detailModal.item.template_task_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="detail-row"><span class="detail-label">Start day</span><span class="detail-value">Day {{ detailModal.item.start_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">End day</span><span class="detail-value">Day {{ detailModal.item.end_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">Spans</span><span class="detail-value">{{ detailModal.item.end_offset_days - detailModal.item.start_offset_days }} days</span></div>
+          <div class="detail-row"><span class="detail-label">Linked tasks</span><span class="detail-value">{{ tasks.filter(t => t.template_activity === detailModal.item.template_activity_id).length }}</span></div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForActivity(detailModal.item.template_activity_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForActivity(detailModal.item.template_activity_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+      </div>
+
+      <template #footer>
+        <BaseButton variant="secondary" @click="detailModal.open = false">Close</BaseButton>
+      </template>
     </BaseModal>
 
   </AppLayout>
@@ -360,8 +485,10 @@ onMounted(loadTemplate)
 .section-count { font-size: var(--font-upper); font-weight: 600; background: var(--violet-bg); color: var(--violet); padding: 2px 10px; border-radius: 20px; }
 
 .task-list { display: flex; flex-direction: column; }
-.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); }
+.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); cursor: pointer; transition: background var(--transition-fast); }
 .task-row:last-child { border-bottom: none; }
+.task-row:hover { background: var(--bg-page); }
+.task-row-linked { padding-left: 44px; }
 .task-row-left { display: flex; gap: 14px; align-items: flex-start; width: 100%; }
 
 .task-day-badge { font-size: var(--font-upper); font-weight: 600; color: var(--violet); background: var(--violet-bg); padding: 4px 10px; border-radius: 6px; flex-shrink: 0; white-space: nowrap; }
@@ -378,6 +505,18 @@ onMounted(loadTemplate)
 .chip-fixed { background: #FEF3C7; color: #92400E; }
 
 .empty-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 28px 20px; font-size: var(--font-label); color: var(--text-muted); text-align: center; }
+
+/* TASK/ACTIVITY DETAIL MODAL */
+.detail-view { display: flex; flex-direction: column; gap: 10px; }
+.detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }
+.detail-row:last-of-type { border-bottom: none; }
+.detail-label { font-size: var(--font-label); color: var(--text-secondary); }
+.detail-value { font-size: var(--font-label); font-weight: 500; color: var(--text-primary); }
+.detail-block { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-light); }
+.detail-block-label { font-size: var(--font-hint); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.detail-block-text { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.55; margin: 0; }
+.detail-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.detail-tag { font-size: var(--font-hint); font-weight: 500; color: var(--violet); background: var(--violet-bg); padding: 3px 10px; border-radius: 20px; }
 
 /* GANTT */
 .gantt-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); overflow: hidden; }

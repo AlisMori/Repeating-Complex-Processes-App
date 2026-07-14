@@ -233,8 +233,8 @@ export function deleteTemplateActivity(id) {
 /**
  * Get all tags belonging to the current user.
  */
-export function getTags() {
-  return api.get('/tags/')
+export function getTags(tagType = null) {
+  return api.get('/tags/', { params: tagType ? { tag_type: tagType } : {} })
 }
 
 /**

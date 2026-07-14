@@ -232,6 +232,7 @@ class TemplateViewSet(viewsets.ModelViewSet):
                 "dep_name": dep_name_by_task_id.get(t.template_task_id),
                 "has_circular_dependency": t.template_task_id in circular,
                 "has_fixed_date_conflict": t.template_task_id in conflicts,
+                "template_activity_id": t.template_activity_id,
             })
 
         activity_bars = [
