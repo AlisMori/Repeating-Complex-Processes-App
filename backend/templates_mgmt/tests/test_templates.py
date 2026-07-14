@@ -87,11 +87,13 @@ class TemplateManagementTests(APITestCase):
         template.refresh_from_db()
         self.assertTrue(template.is_current_version)
 
-    def test_editing_a_template_a_cycle_was_created_from_forks_and_every_version_stays_listed(self):
-        # Every edit forks a new version and freezes the old one
-        # (is_current_version=False). The list endpoint shows every
-        # version in the lineage (the client wants old versions still
-        # visible, not hidden), with only the tip marked current.
+    def test_editing_a_template_a_cycle_was_created_from_forks_once_then_stays_in_place(self):
+        # The cycle exists on the ORIGINAL row only. Edit #1 forks it
+        # (that row is locked). The resulting new version has never
+        # been used by any cycle itself, so edits #2-#10 land on that
+        # SAME new version in place — no repeated forking just because
+        # a cycle exists somewhere earlier in the lineage. Total is
+        # original (frozen) + one current version, not one row per edit.
         from datetime import date
         from cycles.models import CycleInstance
 
@@ -118,18 +120,60 @@ class TemplateManagementTests(APITestCase):
         list_response = self.client.get("/api/templates/")
 
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(list_response.data), 11)  # original + 10 forks
+        self.assertEqual(len(list_response.data), 2)  # original + a single fork
+        self.assertNotEqual(current_id, template.template_id)
         by_id = {row["template_id"]: row for row in list_response.data}
         self.assertIn(current_id, by_id)
         self.assertTrue(by_id[current_id]["is_current_version"])
         self.assertEqual(by_id[current_id]["template_name"], "My Template v9")
         self.assertFalse(by_id[template.template_id]["is_current_version"])
 
-        # Every frozen historical version is still directly reachable
-        # by id (a cycle created from an old version must still work).
+        # The frozen original is still directly reachable by id (a
+        # cycle created from it must still work).
         old_version_response = self.client.get(f"/api/templates/{template.template_id}/")
         self.assertEqual(old_version_response.status_code, status.HTTP_200_OK)
         self.assertEqual(old_version_response.data["is_current_version"], False)
+
+    def test_editing_a_template_forks_again_each_time_a_new_cycle_is_created_from_it(self):
+        # If a SECOND cycle gets created from the current (already-
+        # forked) version, THAT row is now locked too, so the next
+        # edit forks again — repeated forking only tracks repeated
+        # real usage, not repeated edits.
+        from datetime import date
+        from cycles.models import CycleInstance
+
+        template = Template.objects.create(
+            user=self.user, template_name="My Template", is_public=False, created_by_type="user",
+        )
+        CycleInstance.objects.create(
+            user=self.user, template=template, cycle_name="Run 1", start_date=date.today(),
+        )
+
+        first_edit = self.client.put(
+            f"/api/templates/{template.template_id}/", {"template_name": "v1"}, format="json",
+        )
+        v1_id = first_edit.data["template"]["template_id"]
+        self.assertNotEqual(v1_id, template.template_id)
+
+        second_edit = self.client.put(
+            f"/api/templates/{v1_id}/", {"template_name": "v2"}, format="json",
+        )
+        # No new cycle yet, still just one current version being
+        # edited in place.
+        self.assertEqual(second_edit.data["template"]["template_id"], v1_id)
+
+        CycleInstance.objects.create(
+            user=self.user, template_id=v1_id, cycle_name="Run 2", start_date=date.today(),
+        )
+
+        third_edit = self.client.put(
+            f"/api/templates/{v1_id}/", {"template_name": "v3"}, format="json",
+        )
+        v3_id = third_edit.data["template"]["template_id"]
+        self.assertNotEqual(v3_id, v1_id)
+
+        list_response = self.client.get("/api/templates/")
+        self.assertEqual(len(list_response.data), 3)  # original, v1/v2 (same row), v3
 
     def test_template_search_by_name(self):
         Template.objects.create(
