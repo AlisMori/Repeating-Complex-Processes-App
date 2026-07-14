@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.http import HttpResponse
@@ -30,6 +32,7 @@ from .services import (
     maybe_shrink_activity,
     new_version_payload,
 )
+from .bulk_structure import validate_structure_payload, apply_structure_payload
 from .export import (
     SUPPORTED_FORMATS,
     WRITERS,
@@ -137,13 +140,14 @@ class TemplateViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to duplicate this template.")
 
         with transaction.atomic():
+            base_name = re.sub(r"(\s*\(Copy\))+$", "", original_template.template_name).strip()
             duplicate_template = Template.objects.create(
                 user=request.user,
                 template_version=1,
                 parent_template=None,
                 is_current_version=True,
                 template_name=request.data.get("template_name")
-                or f"{original_template.template_name} (Copy)",
+                or f"{base_name} (Copy)",
                 description=original_template.description,
                 is_public=False,
                 created_by_type=original_template.created_by_type,
@@ -392,6 +396,41 @@ class TemplateViewSet(viewsets.ModelViewSet):
             {
                 "message": "Template shared successfully.",
                 "template": TemplateSerializer(shared_template).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def save_structure(self, request, pk=None):
+        """Replaces this template's ENTIRE tasks/activities/dependencies
+        structure in one atomic write — one new version, created once,
+        complete and correct from the moment it exists. See
+        bulk_structure.py for why this replaced the old one-API-call-
+        per-field approach.
+
+        Body: { activities: [...], tasks: [...], dependencies: [...] }
+        — see bulk_structure.py's docstring for the exact shape.
+        """
+        template = self.get_object()
+        errors = validate_structure_payload(request.data, request.user)
+        if errors:
+            return Response({"errors": errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_template, activity_by_local_id, task_by_local_id = apply_structure_payload(
+            template, request.data, request.user
+        )
+
+        return Response(
+            {
+                "new_template_version": new_version_payload(new_template),
+                "activities": {
+                    local_id: TemplateActivitySerializer(activity).data
+                    for local_id, activity in activity_by_local_id.items()
+                },
+                "tasks": {
+                    local_id: TemplateTaskSerializer(task).data
+                    for local_id, task in task_by_local_id.items()
+                },
             },
             status=status.HTTP_201_CREATED,
         )

@@ -73,7 +73,13 @@ class RuntimeTaskManagementTests(APITestCase):
         self.assertEqual(self.cycle_task_a.status, "in_progress")
 
     def test_pending_to_completed_is_rejected(self):
-        # Must pass through in_progress first, no skipping straight to done.
+        # Must pass through in_progress first, no skipping straight to
+        # done — but only while the task is genuinely not yet overdue;
+        # see test_overdue_task_can_still_be_completed and
+        # test_still_pending_but_past_due_date_can_go_straight_to_completed
+        # for the overdue case, which is allowed.
+        self.cycle_task_a.calculated_end_date = date.today() + timedelta(days=30)
+        self.cycle_task_a.save(update_fields=["calculated_end_date"])
         url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
         response = self.client.patch(url, {"status": "completed"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -124,11 +130,35 @@ class RuntimeTaskManagementTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_available_statuses_reflects_current_state(self):
+        self.cycle_task_a.calculated_end_date = date.today() + timedelta(days=30)
+        self.cycle_task_a.save(update_fields=["calculated_end_date"])
         url = reverse("cycle-tasks-available-statuses", args=[self.cycle_task_a.cycle_task_id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["current_status"], "pending")
         self.assertEqual(response.data["available_statuses"], ["in_progress", "skipped"])
+
+    def test_still_pending_but_past_due_date_can_go_straight_to_completed(self):
+        # mark_overdue_tasks is a scheduled job — a task can sit
+        # visually late for a while with status still literally
+        # "pending" before that job next runs. The available actions
+        # should match what the task actually looks like (late), not
+        # depend on the job's timing, so "Completed" must be offered
+        # (and accepted) directly, same as if it were already flipped
+        # to "overdue".
+        self.cycle_task_a.calculated_end_date = date.today() - timedelta(days=1)
+        self.cycle_task_a.save(update_fields=["calculated_end_date"])
+
+        url = reverse("cycle-tasks-available-statuses", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.get(url)
+        self.assertEqual(response.data["current_status"], "pending")
+        self.assertEqual(response.data["available_statuses"], ["completed", "in_progress", "skipped"])
+
+        patch_url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.patch(patch_url, {"status": "completed"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle_task_a.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.status, "completed")
 
     # Field locking, only status moves through this endpoint for tasks
 

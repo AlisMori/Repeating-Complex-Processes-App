@@ -53,6 +53,40 @@ class TemplateManagementTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["template_name"], "My Template")
 
+    def test_editing_a_template_repeatedly_does_not_multiply_list_entries(self):
+        # Every edit forks a new version and freezes the old one
+        # (is_current_version=False). The list endpoint must only ever
+        # surface the current tip, never one row per historical fork.
+        template = Template.objects.create(
+            user=self.user,
+            template_name="My Template",
+            is_public=False,
+            created_by_type="user",
+        )
+
+        current_id = template.template_id
+        for i in range(10):
+            response = self.client.put(
+                f"/api/templates/{current_id}/",
+                {"template_name": f"My Template v{i}"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            current_id = response.data["template"]["template_id"]
+
+        list_response = self.client.get("/api/templates/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["template_id"], current_id)
+        self.assertEqual(list_response.data[0]["template_name"], "My Template v9")
+
+        # Every frozen historical version is still directly reachable
+        # by id (a cycle created from an old version must still work).
+        old_version_response = self.client.get(f"/api/templates/{template.template_id}/")
+        self.assertEqual(old_version_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(old_version_response.data["is_current_version"], False)
+
     def test_template_search_by_name(self):
         Template.objects.create(
             user=self.user,
@@ -117,6 +151,49 @@ class TemplateManagementTests(APITestCase):
         )
         self.assertTrue(
             TemplateActivity.objects.filter(template_id=copied_template_id).exists()
+        )
+
+    def test_duplicate_name_does_not_compound_on_repeated_duplication(self):
+        template = Template.objects.create(
+            user=self.user, template_name="Lasting", description="", created_by_type="user",
+        )
+
+        first = self.client.post(f"/api/templates/{template.template_id}/duplicate/")
+        self.assertEqual(first.data["template"]["template_name"], "Lasting (Copy)")
+        first_id = first.data["template"]["template_id"]
+
+        second = self.client.post(f"/api/templates/{first_id}/duplicate/")
+        self.assertEqual(
+            second.data["template"]["template_name"], "Lasting (Copy)",
+            "Duplicating a copy must not compound into 'Lasting (Copy) (Copy)'.",
+        )
+
+        third = self.client.post(f"/api/templates/{second.data['template']['template_id']}/duplicate/")
+        self.assertEqual(third.data["template"]["template_name"], "Lasting (Copy)")
+
+    def test_duplicate_carries_over_dependencies(self):
+        from cycles.models import TaskDependency
+
+        template = Template.objects.create(
+            user=self.user, template_name="With deps", description="", created_by_type="user",
+        )
+        task_a = TemplateTask.objects.create(
+            template=template, task_name="A", day_offset=0, duration_days=1,
+        )
+        task_b = TemplateTask.objects.create(
+            template=template, task_name="B", day_offset=1, duration_days=1,
+        )
+        TaskDependency.objects.create(task=task_b, depends_on_task=task_a)
+
+        response = self.client.post(f"/api/templates/{template.template_id}/duplicate/")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        copied_id = response.data["template"]["template_id"]
+
+        copied_a = TemplateTask.objects.get(template_id=copied_id, task_name="A")
+        copied_b = TemplateTask.objects.get(template_id=copied_id, task_name="B")
+        self.assertTrue(
+            TaskDependency.objects.filter(task=copied_b, depends_on_task=copied_a).exists(),
+            "Duplicating a template must carry over its dependency edges.",
         )
 
     def test_template_update_creates_new_version(self):

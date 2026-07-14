@@ -1,5 +1,5 @@
 from cycles.dependency_engine import copy_dependencies
-from .models import Template, TemplateActivity, TemplateTask, UserTemplate
+from .models import Template, TemplateActivity, TemplateTask, UserTemplate, TemplateTaskTag, TemplateActivityTag
 
 
 # Copying and versioning
@@ -59,6 +59,25 @@ def deep_copy_template_contents(source_template, target_template):
         task_id_map[task.template_task_id] = new_task
 
     copy_dependencies(source_template, task_id_map)
+
+    # Tag ASSIGNMENTS (which tag is on which task/activity) never
+    # travelled across a version fork before this — every edit to a
+    # template silently dropped every tag from every task and
+    # activity, since the new rows have new ids and the old
+    # TemplateTaskTag/TemplateActivityTag rows still point at the
+    # now-frozen originals. The tags themselves (Tag rows) are
+    # per-user, not per-version, so only the assignment needs
+    # recreating here, using the exact same old-id -> new-instance
+    # maps already built above for dependencies.
+    for task_tag in TemplateTaskTag.objects.filter(template_task__template=source_template):
+        new_task = task_id_map.get(task_tag.template_task_id)
+        if new_task:
+            TemplateTaskTag.objects.create(template_task=new_task, tag=task_tag.tag)
+
+    for activity_tag in TemplateActivityTag.objects.filter(template_activity__template=source_template):
+        new_activity = activity_map.get(activity_tag.template_activity_id)
+        if new_activity:
+            TemplateActivityTag.objects.create(template_activity=new_activity, tag=activity_tag.tag)
 
     return activity_map, task_id_map
 

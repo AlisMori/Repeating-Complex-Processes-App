@@ -34,6 +34,7 @@ from .task_status_engine import (
     InvalidStatusTransition,
     apply_prerequisite_resolution,
     assert_cycle_is_running,
+    effective_status_for_transitions,
     find_unresolved_prerequisites,
     maybe_complete_cycle,
     validate_status_transition,
@@ -255,7 +256,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 "current_status": cycle_task.status,
-                "available_statuses": sorted(ALLOWED_TRANSITIONS.get(cycle_task.status, set())),
+                "available_statuses": sorted(ALLOWED_TRANSITIONS.get(effective_status_for_transitions(cycle_task), set())),
             },
             status=status.HTTP_200_OK,
         )

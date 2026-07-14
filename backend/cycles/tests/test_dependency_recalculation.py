@@ -115,8 +115,13 @@ class DependencyRecalculationEngineTests(APITestCase):
     # -- Cascade shift ---------------------------------------------------
 
     def test_cascade_shift_propagates_through_the_chain(self):
+        # This setUp's task A has two dependents: B (movable) and D
+        # (fixed) — override_fixed is required so the fixed sibling
+        # doesn't block the whole cascade; see the dedicated tests
+        # below for the without-override rejection and the
+        # fixed-task-moves-too behavior on their own.
         url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
-        response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade", "override_fixed": True})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         self.cycle_task_a.refresh_from_db()
@@ -127,19 +132,58 @@ class DependencyRecalculationEngineTests(APITestCase):
         self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
         self.assertEqual(self.cycle_task_c.calculated_start_date, date(2026, 7, 8))
 
-    def test_cascade_shift_reports_warning_for_fixed_dependent_but_still_moves_the_rest(self):
+    def test_cascade_shift_blocked_by_fixed_dependent_is_rejected_not_silently_warned(self):
+        # D depends on A and is fixed — shifting A so D would need to
+        # move too must REJECT the whole operation, not silently
+        # leave D behind while A moves past it (that would leave A
+        # finishing AFTER the thing that's supposed to come after it,
+        # the dependency itself broken, not just "a warning").
         url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
         response = self.client.post(url, {"delay_days": 2, "scope": "cascade"})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        self.assertEqual(len(response.data["warnings"]), 1)
-        self.assertEqual(response.data["warnings"][0]["task_id"], self.cycle_task_d.cycle_task_id)
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["error"], "cascade_blocked_by_fixed_task")
 
+        # Nothing moved — not A, not B, not D.
+        self.cycle_task_a.refresh_from_db()
+        self.cycle_task_b.refresh_from_db()
         self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+        self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 3))
         self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 3))
 
+    def test_cascade_shift_with_override_fixed_moves_the_fixed_dependent_too(self):
+        # Same shift, but with override_fixed — now D is allowed to
+        # move too, so the whole chain stays valid instead of either
+        # being silently broken or being blocked outright.
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "cascade", "override_fixed": True})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["warnings"]), 1)
+        self.assertEqual(response.data["warnings"][0]["error"], "fixed_date_moved")
+        self.assertEqual(response.data["warnings"][0]["task_id"], self.cycle_task_d.cycle_task_id)
+
+        self.cycle_task_a.refresh_from_db()
         self.cycle_task_b.refresh_from_db()
+        self.cycle_task_d.refresh_from_db()
+        self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 3))
         self.assertEqual(self.cycle_task_b.calculated_start_date, date(2026, 7, 5))
+        self.assertEqual(self.cycle_task_d.calculated_start_date, date(2026, 7, 5))
+        # D is still marked as a fixed-date task — override_fixed moves
+        # its dates, it does not silently turn it into a normal task.
+        self.assertTrue(self.cycle_task_d.is_fixed_date)
+
+    def test_shift_preview_cascade_possible_is_false_when_any_branch_is_blocked(self):
+        url = reverse("cycle-tasks-shift-preview", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            response.data["cascade_possible"],
+            "cascade_possible must be False when even one downstream branch (D) is blocked, "
+            "even though the other branch (B) is perfectly movable.",
+        )
 
     # -- Fixed task editing ---------------------------------------------------
 

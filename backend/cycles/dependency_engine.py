@@ -311,12 +311,18 @@ def max_safe_delay_days(cycle_task):
 
 # Cascade planning and application (Module 8 core)
 
-def plan_cascade(cycle_task, new_end_date, visited_ids=None):
+def plan_cascade(cycle_task, new_end_date, visited_ids=None, override_fixed=False):
     """Read-only downstream walk. Returns a list of step dicts, one per
     directly and transitively dependent CYCLE_TASK, in traversal order.
-    Traversal stops down a branch once a task can't be shifted (fixed and
-    not overridden); tasks past that point are left untouched, so they
-    are not part of the plan.
+
+    Without override_fixed, traversal stops down a branch once a task
+    can't be shifted (fixed): the branch beyond that point is left out
+    of the plan entirely, and the step is marked shiftable=False. With
+    override_fixed=True, a fixed dependent is included as a normal
+    shiftable step (its is_fixed_date flag is untouched, only its
+    dates move) and the walk continues past it — this is what makes
+    it possible to actually move a fixed downstream milestone instead
+    of just being told the whole cascade is blocked by it.
     """
     visited_ids = visited_ids if visited_ids is not None else {cycle_task.pk}
     steps = []
@@ -342,7 +348,7 @@ def plan_cascade(cycle_task, new_end_date, visited_ids=None):
             # Already clear of every prerequisite, nothing to do.
             continue
 
-        if dependent.is_fixed_date:
+        if dependent.is_fixed_date and not override_fixed:
             steps.append({
                 "cycle_task_id": dependent.pk,
                 "task_name": dependent.task_name,
@@ -360,8 +366,9 @@ def plan_cascade(cycle_task, new_end_date, visited_ids=None):
             "shiftable": True,
             "new_start_date": planned_start,
             "new_end_date": planned_end,
+            "was_fixed": dependent.is_fixed_date,
         })
-        steps.extend(plan_cascade(dependent, planned_end, visited_ids))
+        steps.extend(plan_cascade(dependent, planned_end, visited_ids, override_fixed))
 
     return steps
 
@@ -390,8 +397,11 @@ def preview_task_shift(cycle_task, delay_days=None, new_start_date=None, new_end
         "upstream_conflict": upstream_conflict,
         "single_possible": single_ok and upstream_conflict is None,
         "single_blocking_task": blocking.task_name if blocking else None,
-        "cascade_possible": (any(step["shiftable"] for step in cascade_plan) or not cascade_plan)
-        and upstream_conflict is None,
+        # EVERY step must be shiftable, not just some of them — a
+        # cascade that would leave even one downstream fixed task
+        # stranded (unable to move to keep the dependency valid) is
+        # not actually possible without an explicit override.
+        "cascade_possible": all(step["shiftable"] for step in cascade_plan) and upstream_conflict is None,
         "cascade_plan": cascade_plan,
     }
 
@@ -457,28 +467,35 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
         cycle_task.save(update_fields=["calculated_start_date", "calculated_end_date"])
         return {"shifted": shifted, "warnings": []}
 
-    # scope == "cascade": apply every shiftable branch, report blocked
-    # branches as warnings rather than failing the whole request, so a
-    # single fixed task downstream does not stop the rest of the path.
-    plan = plan_cascade(cycle_task, new_end)
-    warnings = []
+    # scope == "cascade": plan first, and REFUSE the whole operation if
+    # any downstream task can't move to keep the dependency valid — a
+    # fixed-date dependent that gets left behind while its
+    # prerequisite moves past it is not a "warning", it's the
+    # dependency itself being violated (the prerequisite now finishes
+    # AFTER the thing that's supposed to come after it). override_fixed
+    # here means "move that fixed downstream task too", not "silently
+    # ignore that it would be stranded".
+    plan = plan_cascade(cycle_task, new_end, override_fixed=override_fixed)
+    blocked_steps = [step for step in plan if not step["shiftable"]]
+
+    if blocked_steps and not override_fixed:
+        blocking = blocked_steps[0]
+        raise DependencyConflict(
+            error="cascade_blocked_by_fixed_task",
+            message=(
+                f"Task '{blocking['task_name']}' has a fixed date and would need to move "
+                f"to keep this dependency chain valid. Pass override_fixed=true to move it "
+                f"too, or reschedule '{blocking['task_name']}' directly first."
+            ),
+            task_id=blocking["cycle_task_id"],
+        )
 
     cycle_task.calculated_start_date = new_start
     cycle_task.calculated_end_date = new_end
     cycle_task.save(update_fields=["calculated_start_date", "calculated_end_date"])
 
+    warnings = []
     for step in plan:
-        if not step["shiftable"]:
-            warnings.append({
-                "error": "fixed_end_date_conflict",
-                "task_id": step["cycle_task_id"],
-                "message": (
-                    f"Task '{step['task_name']}' was not shifted because it has a fixed "
-                    "date; downstream tasks past it were left unchanged."
-                ),
-            })
-            continue
-
         dependent = CycleTask.objects.get(pk=step["cycle_task_id"])
         shifted.append({
             "cycle_task_id": dependent.pk,
@@ -491,5 +508,11 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
         dependent.calculated_start_date = step["new_start_date"]
         dependent.calculated_end_date = step["new_end_date"]
         dependent.save(update_fields=["calculated_start_date", "calculated_end_date"])
+        if step.get("was_fixed"):
+            warnings.append({
+                "error": "fixed_date_moved",
+                "task_id": dependent.pk,
+                "message": f"Task '{dependent.task_name}' has a fixed date and was moved anyway (override_fixed).",
+            })
 
     return {"shifted": shifted, "warnings": warnings}

@@ -131,6 +131,48 @@ class TagApiTests(APITestCase):
         self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Tag.objects.filter(pk=other_tag.tag_id).exists())
 
+    def test_tag_assignments_survive_a_template_version_fork(self):
+        # Every edit to a template forks a new version with fresh
+        # task/activity rows — tag ASSIGNMENTS (not the Tag itself,
+        # which is per-user) have to be recreated onto those new rows
+        # or they silently vanish the moment anyone edits anything.
+        template = Template.objects.create(user=self.user, template_name="Onboarding")
+        activity = TemplateActivity.objects.create(
+            template=template, activity_name="Week 1", start_offset_days=0, end_offset_days=5,
+        )
+        task = TemplateTask.objects.create(
+            template=template, template_activity=activity, task_name="Kickoff", day_offset=0, duration_days=1,
+        )
+        important = Tag.objects.create(user=self.user, tag_name="Important")
+        TemplateTaskTag.objects.create(template_task=task, tag=important)
+        TemplateActivityTag.objects.create(template_activity=activity, tag=important)
+
+        # Any mutation forks a new version — creating a second task is
+        # as good as any other for exercising that path.
+        response = self.client.post("/api/template-tasks/", {
+            "template": template.template_id,
+            "task_name": "Second task",
+            "day_offset": 1,
+            "duration_days": 1,
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        new_template_id = response.data["new_template_version"]["template_id"]
+
+        new_task = TemplateTask.objects.get(template_id=new_template_id, task_name="Kickoff")
+        new_activity = TemplateActivity.objects.get(template_id=new_template_id, activity_name="Week 1")
+
+        self.assertTrue(
+            TemplateTaskTag.objects.filter(template_task=new_task, tag=important).exists(),
+            "Task tag assignment did not survive the version fork.",
+        )
+        self.assertTrue(
+            TemplateActivityTag.objects.filter(template_activity=new_activity, tag=important).exists(),
+            "Activity tag assignment did not survive the version fork.",
+        )
+        # And the OLD (now frozen) version keeps its own assignment
+        # too — this is a copy, not a move.
+        self.assertTrue(TemplateTaskTag.objects.filter(template_task=task, tag=important).exists())
+
 
 class TemplateCategoryApiTests(APITestCase):
     """Covers TemplateCategoryViewSet: create, rename-in-place, delete

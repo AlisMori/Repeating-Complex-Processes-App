@@ -55,6 +55,23 @@ def assert_cycle_is_running(cycle):
         )
 
 
+def effective_status_for_transitions(cycle_task, today=None):
+    """The status to use when looking up ALLOWED_TRANSITIONS, which can
+    differ from cycle_task.status itself: mark_overdue_tasks is a
+    scheduled background job, so a task can sit visually overdue
+    (past its own end date) for a while with status still literally
+    "pending" until that job next runs. Without this, a user who
+    finished a task late has to wait for the job to catch up before
+    "Completed" even becomes an option — the actions available to the
+    user should match what they can SEE (the task is late), not an
+    internal detail of when a cron job last ran.
+    """
+    today = today or date.today()
+    if cycle_task.status == "pending" and cycle_task.calculated_end_date < today:
+        return "overdue"
+    return cycle_task.status
+
+
 def validate_status_transition(cycle_task, new_status):
     """FR-6.1, FR-6.4. Raises InvalidStatusTransition if the move isn't
     allowed. Setting the same status again is always a no-op, not an error.
@@ -67,7 +84,7 @@ def validate_status_transition(cycle_task, new_status):
             f"'{new_status}' is set automatically by the system, it can't be set directly."
         )
 
-    allowed = ALLOWED_TRANSITIONS.get(cycle_task.status, set())
+    allowed = ALLOWED_TRANSITIONS.get(effective_status_for_transitions(cycle_task), set())
     if new_status not in allowed:
         raise InvalidStatusTransition(
             f"Task '{cycle_task.task_name}' cannot move from '{cycle_task.status}' to '{new_status}'."
