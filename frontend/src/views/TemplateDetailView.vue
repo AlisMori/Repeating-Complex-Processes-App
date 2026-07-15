@@ -1,7 +1,7 @@
 <!-- /frontend/src/views/TemplateDetailView.vue -->
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -10,6 +10,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import GanttChart from '@/components/GanttChart.vue'
 import { useToastStore } from '@/stores/toast'
+import { useOnboardingStore } from '@/stores/onboarding'
 import {
   getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview,
   duplicateTemplate, deleteTemplate, downloadTemplate, updateTemplate,
@@ -28,6 +29,7 @@ import { getErrorMessage, isPermissionError } from '@/utils/apiErrors'
 const route = useRoute()
 const router = useRouter()
 const toast = useToastStore()
+const onboardingStore = useOnboardingStore()
 
 const template = ref(null)
 const tasks = ref([])
@@ -37,12 +39,31 @@ const timeline = ref(null)
 const loading = ref(true)
 const error = ref('')
 const deleteModalOpen = ref(false)
+
+// Overflow "⋯" menu shown per row for secondary actions (note,
+// delete) — only one open at a time, closes on any click outside it.
+const openMenuFor = ref(null)
+function toggleMenu(key) {
+  openMenuFor.value = openMenuFor.value === key ? null : key
+}
+function closeMenu() {
+  openMenuFor.value = null
+}
+onMounted(() => document.addEventListener('click', closeMenu))
+onUnmounted(() => document.removeEventListener('click', closeMenu))
 const taskTagLinks = ref([])
 const activityTagLinks = ref([])
 const allTags = ref([])
 const detailModal = ref({ open: false, type: null, item: null })
 const deleteLoading = ref(false)
 const versions = ref([])
+const viewMode = ref('list') // 'list' | 'gantt'
+// Forces the version <select> to remount after each pick — a native
+// select always visually locks onto whatever option the browser last
+// selected, regardless of what its bound v-model value is reset to
+// afterward (confirmed: resetting the bound value alone doesn't
+// re-sync the DOM). Remounting via :key is what actually works.
+const versionSelectKey = ref(0)
 const makeCurrentLoading = ref(false)
 
 // Tags
@@ -149,40 +170,9 @@ function tagNamesForActivity(activityId) {
   return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
 }
 
-// One ordered list — each activity immediately followed by the tasks
-// linked to it (grouped by relationship, not by type), then any
-// tasks with no linked activity at the end. Mirrors exactly how
-// GanttChart.vue groups the same data on the right.
-const groupedItems = computed(() => {
-  const result = []
-  const linkedTaskIds = new Set()
-
-  for (const act of activities.value) {
-    result.push({ type: 'activity', item: act })
-    const linkedTasks = tasks.value
-      .filter(t => t.template_activity === act.template_activity_id)
-      .sort((a, b) => a.day_offset - b.day_offset)
-    for (const t of linkedTasks) {
-      result.push({ type: 'task', item: t, linked: true })
-      linkedTaskIds.add(t.template_task_id)
-    }
-  }
-
-  const unlinkedTasks = tasks.value
-    .filter(t => !linkedTaskIds.has(t.template_task_id))
-    .sort((a, b) => a.day_offset - b.day_offset)
-  for (const t of unlinkedTasks) {
-    result.push({ type: 'task', item: t, linked: false })
-  }
-
-  return result
-})
-
-function openDetail(type, item) {
-  detailModal.value = { open: true, type, item }
-}
 
 function onSwitchVersion(newId) {
+  versionSelectKey.value++
   if (String(newId) === String(templateId.value)) return
   router.push({ name: 'template-detail', params: { id: newId } })
 }
@@ -513,7 +503,10 @@ const ganttData = computed(() => {
 })
 watch(() => route.params.id, loadTemplate)
 
-onMounted(loadTemplate)
+onMounted(async () => {
+  await loadTemplate()
+  onboardingStore.maybeAutoStart('template-detail')
+})
 </script>
 
 <template>
@@ -524,17 +517,29 @@ onMounted(loadTemplate)
         <span class="breadcrumb-sep">›</span>
         <span class="breadcrumb-current">{{ template?.template_name || 'Loading...' }}</span>
       </div>
-      <div style="margin-left: auto; display: flex; gap: 10px;">
-        <BaseButton variant="secondary" size="sm" @click="downloadModal = { open: true, format: 'json' }">Export</BaseButton>
-        <BaseButton variant="secondary" size="sm" @click="onDuplicate">Duplicate</BaseButton>
-        <BaseButton variant="danger" size="sm" @click="deleteModalOpen = true">Delete</BaseButton>
-        <BaseButton variant="primary" size="sm" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
+      <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+        <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('template-detail')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        <BaseButton variant="primary" size="sm" data-tour="tpl-detail-edit" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
           Edit template
         </BaseButton>
+        <div class="row-menu" data-tour="tpl-detail-actions" @click.stop>
+          <button type="button" class="row-menu-trigger" @click="toggleMenu('template-actions')">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+          </button>
+          <div v-if="openMenuFor === 'template-actions'" class="row-menu-dropdown">
+            <button type="button" class="row-menu-item" @click="downloadModal = { open: true, format: 'json' }; openMenuFor = null">Export</button>
+            <button type="button" class="row-menu-item" @click="onDuplicate(); openMenuFor = null">Duplicate</button>
+            <button type="button" class="row-menu-item row-menu-item-danger" @click="deleteModalOpen = true; openMenuFor = null">Delete</button>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -557,10 +562,13 @@ onMounted(loadTemplate)
               <span v-if="template.is_current_version" class="meta-pill pill-current">Current version</span>
               <BaseSelect
                 v-if="versions.length > 1"
+                :key="versionSelectKey"
                 class="version-select"
-                :model-value="templateId"
-                @update:model-value="onSwitchVersion"
+                data-tour="tpl-detail-versions"
+                :model-value="''"
+                @update:model-value="(v) => { if (v) onSwitchVersion(v) }"
               >
+                <option value="" disabled>Other versions</option>
                 <option v-for="v in versions" :key="v.template_id" :value="v.template_id">
                   v{{ v.template_version }}{{ v.is_current_version ? ' (current)' : '' }}
                 </option>
@@ -619,19 +627,132 @@ onMounted(loadTemplate)
           </div>
         </div>
 
-        <div class="two-col">
+        <!-- VIEW MODE TOGGLE -->
+        <div class="view-toggle-bar" data-tour="tpl-detail-view-toggle">
+          <div class="view-toggle">
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              List
+            </button>
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'gantt' }" @click="viewMode = 'gantt'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="4" x2="8" y2="10"/></svg>
+              Gantt
+            </button>
+          </div>
+        </div>
+
+        <!-- GANTT VIEW -->
+        <div v-if="viewMode === 'gantt'" class="gantt-card">
+          <div class="gantt-header">Timeline</div>
+          <div v-if="!ganttData" class="gantt-empty">No tasks or activities to display.</div>
+          <GanttChart
+            v-else
+            :task-bars="ganttData.taskBars"
+            :activity-bars="ganttData.activityBars"
+            :max-day="ganttData.maxDay"
+            :px-per-day="32"
+          />
+        </div>
+
+        <!-- LIST VIEW -->
+        <div v-else class="two-col">
 
           <!-- LEFT -->
           <div class="col-main">
 
-	  <!-- TASKS -->
-            <div class="section-card" v-if="tasks.length > 0">
+	  <!-- ACTIVITIES + their linked tasks, nested; unlinked tasks at the end -->
+            <div class="section-card" v-if="tasks.length > 0 || activities.length > 0" data-tour="tpl-detail-list">
               <div class="section-header">
-                <div class="section-title">Tasks</div>
-                <span class="section-count">{{ tasks.length }}</span>
+                <div class="section-title">Tasks & Activities</div>
+                <span class="section-count">{{ tasks.length + activities.length }}</span>
               </div>
               <div class="task-list">
-                <div v-for="task in tasks" :key="task.template_task_id" class="task-row">
+                <template v-for="act in activities" :key="'act-' + act.template_activity_id">
+                  <div class="task-row">
+                    <div class="task-row-left">
+                      <div class="task-day-badge activity-badge">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</div>
+                      <div style="flex:1; min-width:0;">
+                        <div class="task-name">{{ act.activity_name }}</div>
+                        <div class="task-meta">Spans {{ act.end_offset_days - act.start_offset_days }} days</div>
+                        <div v-if="act.description" class="task-desc">{{ act.description }}</div>
+                        <div v-if="act.note_text" class="task-note">{{ act.note_text }}</div>
+
+                        <!-- TAGS -->
+                        <div class="tag-row">
+                          <span v-for="tag in tagsForActivity(act.template_activity_id)" :key="tag.assignmentId" class="tag-chip">
+                            {{ tag.tag_name }}
+                            <button type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
+                          </span>
+                          <BaseSelect v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
+                            <option value="">+ Add tag</option>
+                            <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
+                          </BaseSelect>
+                          <button type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
+                        </div>
+                      </div>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('activity-' + act.template_activity_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'activity-' + act.template_activity_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('activity', act); openMenuFor = null">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
+                          <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('activity', act); openMenuFor = null">Delete activity</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-for="task in tasksForActivity(act.template_activity_id)" :key="task.template_task_id" class="task-row task-row-nested">
+                    <div class="task-row-left">
+                      <div class="task-day-badge">Day {{ task.day_offset }}</div>
+                      <div style="flex:1; min-width:0;">
+                        <div class="task-name">
+                          {{ task.task_name }}
+                          <span v-if="task.is_mandatory" class="chip chip-mandatory">MANDATORY</span>
+                          <span v-if="task.is_fixed_date" class="chip chip-fixed">FIXED DATE</span>
+                        </div>
+                        <div class="task-meta">
+                          Duration: {{ task.duration_days || 1 }} day{{ task.duration_days > 1 ? 's' : '' }}
+                          <span v-if="task.reminder_lead_days"> · Reminder: {{ formatReminders(task.reminder_lead_days) }}</span>
+                        </div>
+                        <div v-if="task.description" class="task-desc">{{ task.description }}</div>
+                        <div v-if="task.note_text" class="task-note">{{ task.note_text }}</div>
+                        <div v-if="dependencies.find(d => d.task === task.template_task_id)" class="task-dep">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                            <path d="M18 9a9 9 0 0 1-9 9"/>
+                          </svg>
+                          Depends on: {{ getDependencyName(dependencies.find(d => d.task === task.template_task_id).depends_on_task) }}
+                        </div>
+
+                        <!-- TAGS -->
+                        <div class="tag-row">
+                          <span v-for="tag in tagsForTask(task.template_task_id)" :key="tag.assignmentId" class="tag-chip">
+                            {{ tag.tag_name }}
+                            <button type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
+                          </span>
+                          <BaseSelect v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
+                            <option value="">+ Add tag</option>
+                            <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
+                          </BaseSelect>
+                          <button type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
+                        </div>
+                      </div>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'task-' + task.template_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                          <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('task', task); openMenuFor = null">Delete task</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- UNLINKED TASKS (no activity) -->
+                <div v-for="task in tasks.filter(t => !t.template_activity)" :key="task.template_task_id" class="task-row">
                   <div class="task-row-left">
                     <div class="task-day-badge">Day {{ task.day_offset }}</div>
                     <div style="flex:1; min-width:0;">
@@ -667,68 +788,21 @@ onMounted(loadTemplate)
                         <button type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
                       </div>
                     </div>
-                    <div class="row-actions">
-                      <button type="button" class="row-note-btn" @click="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
-                      <button type="button" class="row-delete-btn" title="Delete task" @click="openDeleteItem('task', task)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-                        </svg>
+                    <div class="row-menu" @click.stop>
+                      <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
                       </button>
+                      <div v-if="openMenuFor === 'task-' + task.template_task_id" class="row-menu-dropdown">
+                        <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('task', task); openMenuFor = null">Delete task</button>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-            <div v-if="tasks.length === 0" class="empty-card">
-              No tasks defined. Click Edit template to add tasks.
-            </div>
-
-            <!-- ACTIVITIES -->
-            <div class="section-card" v-if="activities.length > 0">
-              <div class="section-header">
-                <div class="section-title">Activities</div>
-                <span class="section-count">{{ activities.length }}</span>
-              </div>
-              <div class="task-list">
-                <div v-for="act in activities" :key="act.template_activity_id" class="task-row">
-                  <div class="task-row-left">
-                    <div class="task-day-badge activity-badge">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</div>
-                    <div style="flex:1; min-width:0;">
-                      <div class="task-name">{{ act.activity_name }}</div>
-                      <div class="task-meta">Spans {{ act.end_offset_days - act.start_offset_days }} days</div>
-                      <div v-if="act.description" class="task-desc">{{ act.description }}</div>
-                      <div v-if="act.note_text" class="task-note">{{ act.note_text }}</div>
-                      <div v-if="tasksForActivity(act.template_activity_id).length > 0" class="activity-grouped-tasks">
-                        Tasks: {{ tasksForActivity(act.template_activity_id).map(t => t.task_name).join(', ') }}
-                      </div>
-
-                      <!-- TAGS -->
-                      <div class="tag-row">
-                        <span v-for="tag in tagsForActivity(act.template_activity_id)" :key="tag.assignmentId" class="tag-chip">
-                          {{ tag.tag_name }}
-                          <button type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
-                        </span>
-                        <BaseSelect v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
-                          <option value="">+ Add tag</option>
-                          <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
-                        </BaseSelect>
-                        <button type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
-                      </div>
-                    </div>
-                    <div class="row-actions">
-                      <button type="button" class="row-note-btn" @click="openNoteModal('activity', act)">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
-                      <button type="button" class="row-delete-btn" title="Delete activity" @click="openDeleteItem('activity', act)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-if="activities.length === 0" class="empty-card">
-              No activities defined.
+            <div v-if="tasks.length === 0 && activities.length === 0" class="empty-card">
+              No tasks or activities defined. Click Edit template to add some.
             </div>
 
             <!-- TAG MANAGEMENT -->
@@ -760,20 +834,6 @@ onMounted(loadTemplate)
               </div>
             </div>
 
-          </div>
-
-          <!-- RIGHT: GANTT -->
-          <div class="col-side">
-            <div class="gantt-card">
-              <div class="gantt-header">Timeline</div>
-              <div v-if="!ganttData" class="gantt-empty">No tasks or activities to display.</div>
-              <GanttChart
-                v-else
-                :task-bars="ganttData.taskBars"
-                :activity-bars="ganttData.activityBars"
-                :max-day="ganttData.maxDay"
-              />
-            </div>
           </div>
 
         </div>
@@ -927,6 +987,8 @@ onMounted(loadTemplate)
 .breadcrumb-link:hover { color: var(--violet); }
 .breadcrumb-sep { color: var(--text-muted); }
 .breadcrumb-current { color: var(--text-primary); font-weight: 500; }
+.page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
+.page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
 .detail-page { display: flex; flex-direction: column; gap: 20px; }
 .loading-msg { font-size: var(--font-label); color: var(--text-muted); padding: 40px 0; }
@@ -957,6 +1019,13 @@ onMounted(loadTemplate)
 .meta-value { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
 
 /* TWO COL */
+/* ── VIEW TOGGLE ── */
+.view-toggle-bar { display: flex; align-items: center; }
+.view-toggle { display: flex; align-items: center; gap: 4px; background: var(--bg-page); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 3px; }
+.view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border: none; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: var(--font-label); font-weight: 500; font-family: var(--font-main); cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast); }
+.view-toggle-btn.active { background: var(--white); color: var(--violet); box-shadow: var(--shadow-sm); }
+.view-toggle-btn:hover:not(.active) { color: var(--text-primary); }
+
 .two-col { display: flex; gap: 20px; align-items: flex-start; }
 .col-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .col-side { width: 380px; flex-shrink: 0; position: sticky; top: 80px; }
@@ -969,6 +1038,7 @@ onMounted(loadTemplate)
 
 .task-list { display: flex; flex-direction: column; }
 .task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); cursor: pointer; transition: background var(--transition-fast); }
+.task-row-nested { padding-left: 48px; background: var(--bg-page); }
 .task-row:last-child { border-bottom: none; }
 .task-row:hover { background: var(--bg-page); }
 .task-row-linked { padding-left: 44px; }
@@ -990,18 +1060,56 @@ onMounted(loadTemplate)
 .empty-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 28px 20px; font-size: var(--font-label); color: var(--text-muted); text-align: center; }
 
 
-/* ROW DELETE BUTTON */
-.row-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
-.row-delete-btn svg { width: 13px; height: 13px; stroke: var(--text-muted); }
-.row-delete-btn:hover { border-color: #FECACA; background: var(--danger-bg); }
-.row-delete-btn:hover svg { stroke: var(--danger); }
-
-.row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
-.row-note-btn { font-size: var(--font-hint); font-weight: 600; color: var(--text-secondary); background: var(--white); border: 1px solid var(--border-light); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-family: var(--font-main); white-space: nowrap; }
-.row-note-btn:hover { background: var(--bg-page); }
+/* ── ROW OVERFLOW MENU ──
+   Secondary per-row actions (note, delete) collapse behind a "⋯"
+   trigger instead of sitting as always-visible buttons. */
+.row-menu { position: relative; flex-shrink: 0; }
+.row-menu-trigger {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.row-menu-trigger svg { width: 15px; height: 15px; }
+.row-menu-trigger:hover { background: var(--bg-page); border-color: var(--border); }
+.row-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--white);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+}
+.row-menu-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font-size: var(--font-label);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+  white-space: nowrap;
+}
+.row-menu-item:hover { background: var(--bg-page); }
+.row-menu-item-danger { color: var(--danger); }
+.row-menu-item-danger:hover { background: var(--danger-bg); }
 
 .task-note { font-size: var(--font-label); color: var(--text-secondary); margin-top: 4px; font-style: italic; }
-.activity-grouped-tasks { font-size: var(--font-upper); color: var(--text-muted); margin-top: 5px; }
 
 .field-label-modal { display: block; font-size: var(--font-label); font-weight: 500; color: var(--text-primary); margin-bottom: 6px; }
 .note-textarea { width: 100%; padding: 9px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-md); font-family: var(--font-main); font-size: var(--font-label); color: var(--text-primary); resize: vertical; box-sizing: border-box; }

@@ -58,7 +58,7 @@ const props = defineProps({
 
 const ROW_HEIGHT = 24  // tick row
 const ACTIVITY_ROW_HEIGHT = 36
-const TASK_ROW_HEIGHT = 46 // extra room for an optional dependency line
+const TASK_ROW_HEIGHT = 36
 const BAR_CENTER_Y = 18 // vertical center of a bar within its row (top:3px, height:30px)
 
 // One flat, ordered list of rows: each activity immediately
@@ -97,7 +97,17 @@ const totalWidth = computed(() => safeMaxDay.value * props.pxPerDay)
 // day range across the full chart height — makes it obvious exactly
 // which days a bar spans relative to the tick marks above, even for
 // bars far down the task list.
-const hoveredBar = ref(null)
+// Tracked by row key (a stable string), not object reference —
+// comparing hoveredBar to row.bar by === was unreliable (verified:
+// the correct bar was being set on hover, but the equality check
+// still failed on the very next render), most likely a Vue
+// reactivity/proxy-identity subtlety with props-derived objects.
+// Key comparison sidesteps that class of bug entirely.
+const hoveredRowKey = ref(null)
+const hoveredBar = computed(() => {
+  const row = rows.value.find((r) => r.key === hoveredRowKey.value)
+  return row ? row.bar : null
+})
 
 function highlightStyle(bar) {
   const left = bar.start * props.pxPerDay
@@ -149,21 +159,17 @@ const chartStyle = computed(() => ({
 }))
 
 // ── DEPENDENCY ARROW GEOMETRY ──────────────────────────────
-const taskSectionTop = computed(() => {
-  let top = ROW_HEIGHT
-  if (props.activityBars.length > 0) {
-    top += ROW_HEIGHT + props.activityBars.length * ACTIVITY_ROW_HEIGHT
-  }
-  if (props.taskBars.length > 0) {
-    top += ROW_HEIGHT
-  }
-  return top
-})
+// Rows are no longer two separate blocks (activities, then tasks) —
+// the grouping redesign interleaves each activity with its linked
+// tasks. So a bar's vertical position is wherever it actually landed
+// in `rows`, not some fixed offset assuming a rigid two-block layout.
+// (This only works cleanly because ACTIVITY_ROW_HEIGHT and
+// TASK_ROW_HEIGHT are equal — every row is the same height.)
+const chartHeight = computed(() => ROW_HEIGHT + rows.value.length * TASK_ROW_HEIGHT)
 
-const chartHeight = computed(() => taskSectionTop.value + props.taskBars.length * TASK_ROW_HEIGHT)
-
-function barCenterY(index) {
-  return taskSectionTop.value + index * TASK_ROW_HEIGHT + BAR_CENTER_Y
+function barCenterY(bar) {
+  const rowIndex = rows.value.findIndex((r) => r.bar === bar)
+  return ROW_HEIGHT + rowIndex * TASK_ROW_HEIGHT + BAR_CENTER_Y
 }
 
 function barRight(bar) {
@@ -188,14 +194,14 @@ const dependencyArrows = computed(() => {
     if (!depBar) return
 
     const fromX = barRight(depBar)
-    const fromY = barCenterY(depIndex)
+    const fromY = barCenterY(depBar)
     const toX = barLeft(bar)
-    const toY = barCenterY(i)
+    const toY = barCenterY(bar)
 
     let path
     if (fromY === toY) {
       path = `M ${fromX} ${fromY} L ${Math.max(toX - 6, fromX)} ${toY}`
-    } else if (toX > fromX) {
+    } else if (toX >= fromX) {
       // Clamp the elbow so it always sits strictly between fromX and
       // toX, even when the gap is very small (dependent tasks are
       // often scheduled right up against each other).
@@ -273,10 +279,10 @@ const dependencyArrows = computed(() => {
             <div
               class="gantt-bar gantt-bar-activity"
               :style="positionBar(row.bar)"
-              @mouseenter="hoveredBar = row.bar"
-              @mouseleave="hoveredBar = null"
+              @mouseenter="hoveredRowKey = row.key"
+              @mouseleave="hoveredRowKey = null"
             ></div>
-            <div v-if="hoveredBar === row.bar" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
+            <div v-if="hoveredRowKey === row.key" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
               {{ row.bar.end - row.bar.start }} day{{ (row.bar.end - row.bar.start) !== 1 ? 's' : '' }}
             </div>
           </template>
@@ -289,17 +295,11 @@ const dependencyArrows = computed(() => {
                 'gantt-bar-task': !row.bar.isMandatory && !row.bar.isFixed
               }"
               :style="positionBar(row.bar)"
-              @mouseenter="hoveredBar = row.bar"
-              @mouseleave="hoveredBar = null"
+              @mouseenter="hoveredRowKey = row.key"
+              @mouseleave="hoveredRowKey = null"
             ></div>
-            <div v-if="hoveredBar === row.bar" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
+            <div v-if="hoveredRowKey === row.key" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
               {{ row.bar.end - row.bar.start }} day{{ (row.bar.end - row.bar.start) !== 1 ? 's' : '' }}
-            </div>
-            <div v-if="row.bar.depName" class="gantt-dep-row" :style="{ left: (row.bar.start * pxPerDay) + 'px' }">
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M2 6h8M7 3l3 3-3 3"/>
-              </svg>
-              after {{ row.bar.depName }}
             </div>
           </template>
         </div>
@@ -445,24 +445,35 @@ const dependencyArrows = computed(() => {
   justify-content: center;
   font-size: var(--font-hint);
   font-weight: 600;
-  color: var(--white);
-  background: #1E293B;
+  color: #1E293B;
+  background: var(--white);
+  border: 1px solid var(--border-light);
   border-radius: 5px;
   padding: 3px 9px;
   white-space: nowrap;
   pointer-events: none;
   z-index: 5;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
 }
 
-.gantt-bar-tooltip::after {
+.gantt-bar-tooltip::before {
   content: '';
   position: absolute;
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border-light);
+}
+
+.gantt-bar-tooltip::after {
+  content: '';
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top-color: #1E293B;
+  border-top-color: var(--white);
 }
 
 .gantt-tick-row { position: relative; }
@@ -482,18 +493,6 @@ const dependencyArrows = computed(() => {
 .gantt-bar-task { background: #475569; }
 .gantt-bar-mandatory { background: #EF4444; }
 .gantt-bar-fixed { background: #F59E0B; }
-
-.gantt-dep-row {
-  position: absolute;
-  top: 37px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-hint);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.gantt-dep-row svg { width: 10px; height: 10px; }
 
 .gantt-dep-arrows {
   position: absolute;

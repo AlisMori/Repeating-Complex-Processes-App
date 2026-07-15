@@ -1,7 +1,7 @@
 <!-- /frontend/src/views/CycleDetailView.vue -->
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -30,6 +30,20 @@ const toast = useToastStore()
 
 const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
+
+// Overflow "⋯" menu shown per row for secondary actions (note,
+// reschedule, edit dates) — only one open at a time, closes on any
+// click outside it. `openMenuFor` holds a unique string key per row
+// (e.g. 'task-42', 'activity-7') so each row's menu is independent.
+const openMenuFor = ref(null)
+function toggleMenu(key) {
+  openMenuFor.value = openMenuFor.value === key ? null : key
+}
+function closeMenu() {
+  openMenuFor.value = null
+}
+onMounted(() => document.addEventListener('click', closeMenu))
+onUnmounted(() => document.removeEventListener('click', closeMenu))
 
 // Shift modal replaces the old "record delay" modal — it wraps the
 // real backend flow (shift_preview then shift), matching what
@@ -724,7 +738,17 @@ onMounted(loadCycle)
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
                   <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('tasktag-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'tasktag-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
                     <BaseSelect
                       v-if="task.status !== 'completed' && task.status !== 'skipped'"
                       class="status-select"
@@ -734,7 +758,6 @@ onMounted(loadCycle)
                       <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                     </BaseSelect>
                     <button v-else class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
@@ -754,17 +777,24 @@ onMounted(loadCycle)
                     {{ act.activity_name }}
                     <span class="act-task-count">{{ tasksForActivity(act).length }} task{{ tasksForActivity(act).length !== 1 ? 's' : '' }}</span>
                   </div>
-                  <span class="tc-status status-activity">Activity</span>
+                  <div class="tc-right-top">
+                    <span class="tc-status status-activity">Activity</span>
+                    <div v-if="cycle.status === 'running'" class="row-menu" @click.stop>
+                      <button type="button" class="row-menu-trigger" @click="toggleMenu('activity-' + act.cycle_activity_id)">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                      </button>
+                      <div v-if="openMenuFor === 'activity-' + act.cycle_activity_id" class="row-menu-dropdown">
+                        <button type="button" class="row-menu-item" @click="openActivityEdit(act); openMenuFor = null">Edit dates</button>
+                        <button type="button" class="row-menu-item" @click="openNoteModal('activity', act); openMenuFor = null">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="act-dates">{{ formatDate(act.calculated_start_date) }} → {{ formatDate(act.calculated_end_date) }}</div>
 
                 <template v-if="expandedActivityIds.has(act.cycle_activity_id)">
                   <div v-if="act.note_text" class="act-note">{{ act.note_text }}</div>
                   <div v-if="tagsForActivity(act).length > 0" class="tc-tag-row"><span v-for="tag in tagsForActivity(act)" :key="tag.tag_id" class="tc-tag-chip tc-tag-chip-violet">{{ tag.tag_name }}</span></div>
-                  <div v-if="cycle.status === 'running'" class="act-actions">
-                    <button class="action-btn action-undo" @click.stop="openActivityEdit(act)">Edit dates</button>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('activity', act)">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
-                  </div>
 
                   <div v-if="tasksForActivity(act).length > 0" class="act-task-list">
                     <div v-for="task in tasksForActivity(act)" :key="task.cycle_task_id" class="act-task-row" @click.stop="openTaskDetail(task)">
@@ -790,7 +820,17 @@ onMounted(loadCycle)
                     <div v-if="task.note_text" class="tc-note">{{ task.note_text }}</div>
                   </div>
                   <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('overdue-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'overdue-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
                     <div class="status-actions">
                       <button
                         v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
@@ -801,7 +841,6 @@ onMounted(loadCycle)
                       >{{ opt.label }}</button>
                       <button class="status-pill pill-delay" @click.stop="openShiftModal(task)">Reschedule</button>
                     </div>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
@@ -818,7 +857,17 @@ onMounted(loadCycle)
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
                   <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('pending-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'pending-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
                     <div class="status-actions">
                       <button
                         v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
@@ -828,7 +877,6 @@ onMounted(loadCycle)
                         @click="updateTaskStatus(task.cycle_task_id, opt.value)"
                       >{{ opt.label }}</button>
                     </div>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
@@ -845,7 +893,17 @@ onMounted(loadCycle)
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
                   <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('inprogress-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'inprogress-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
                     <div class="status-actions">
                       <button
                         v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
@@ -855,7 +913,6 @@ onMounted(loadCycle)
                         @click="updateTaskStatus(task.cycle_task_id, opt.value)"
                       >{{ opt.label }}</button>
                     </div>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
                   </div>
                 </div>
               </div>
@@ -1179,6 +1236,7 @@ onMounted(loadCycle)
 .tc-tag-chip { font-size: var(--font-hint); font-weight: 500; background: var(--bg-page); color: var(--text-secondary); padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border-light); }
 .tc-tag-chip-violet { background: var(--violet-mid); color: var(--violet-dark); border-color: #DDD6FE; }
 .tc-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+.tc-right-top { display: flex; align-items: center; gap: 8px; }
 .tc-mandatory { font-size: var(--font-hint); font-weight: 700; color: var(--danger); }
 .tc-fixed { font-size: var(--font-hint); font-weight: 700; color: #92400E; }
 
@@ -1207,6 +1265,54 @@ onMounted(loadCycle)
 
 /* ── STATUS ACTIONS ── */
 .status-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* ── ROW OVERFLOW MENU ──
+   Secondary per-row actions (note, edit dates) collapse behind a
+   "⋯" trigger instead of sitting as always-visible buttons — keeps
+   the primary status-pill actions from getting crowded out. */
+.row-menu { position: relative; }
+.row-menu-trigger {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.row-menu-trigger svg { width: 16px; height: 16px; }
+.row-menu-trigger:hover { background: var(--bg-page); border-color: var(--border); }
+.row-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--white);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+}
+.row-menu-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font-size: var(--font-label);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+  white-space: nowrap;
+}
+.row-menu-item:hover { background: var(--bg-page); }
 .status-pill {
   font-size: var(--font-hint);
   font-weight: 700;
