@@ -27,6 +27,7 @@ const error = ref('')
 const selectedScopes = ref([])
 const results = ref(null)
 const debounceHandle = ref(null)
+const expandedTemplateResults = ref({})
 
 const scopeOptions = [
   { value: 'all', label: 'All' },
@@ -162,11 +163,35 @@ function goToResult(result) {
   router.push(result.url)
 }
 
+function goToUrl(url) {
+  isOpen.value = false
+  router.push(url)
+}
+
+function toggleTemplateHistory(resultId) {
+  expandedTemplateResults.value = {
+    ...expandedTemplateResults.value,
+    [resultId]: !expandedTemplateResults.value[resultId],
+  }
+}
+
+function isTemplateHistoryOpen(resultId) {
+  return !!expandedTemplateResults.value[resultId]
+}
+
+function hasVersionHistory(result) {
+  return !!result.metadata && typeof result.metadata.historical_match_count === 'number'
+}
+
 watch([query, selectedScopes], () => {
   if (!isOpen.value) {
     return
   }
   scheduleSearch()
+})
+
+watch(results, () => {
+  expandedTemplateResults.value = {}
 })
 
 watch(isOpen, (open) => {
@@ -231,22 +256,75 @@ onBeforeUnmount(() => {
             <span class="group-count">{{ group.count }}</span>
           </div>
 
-          <button
-            v-for="result in group.results"
-            :key="`${group.type}-${result.id}-${result.url}`"
-            type="button"
-            class="result-row"
-            @click="goToResult(result)"
-          >
-            <div class="result-type">{{ result.type }}</div>
-            <div class="result-copy">
-              <div class="result-title">{{ result.title }}</div>
-              <div v-if="result.snippet" class="result-snippet">{{ result.snippet }}</div>
-              <div v-if="result.parent" class="result-parent">
-                in {{ result.parent.type === 'cycle' ? 'Cycle' : 'Template' }}: {{ result.parent.title }}
+          <template v-for="result in group.results" :key="`${group.type}-${result.id}-${result.url}`">
+            <div
+              v-if="hasVersionHistory(result)"
+              class="template-result-card"
+            >
+              <button
+                type="button"
+                class="result-row"
+                @click="goToResult(result)"
+              >
+                <div class="result-type">{{ result.type }}</div>
+                <div class="result-copy">
+                  <div class="result-title-row">
+                    <div class="result-title">{{ result.title }}</div>
+                    <span class="version-pill">Current v{{ result.metadata.template_version }}</span>
+                  </div>
+                  <div class="template-summary">{{ result.metadata.summary }}</div>
+                  <div v-if="result.snippet" class="result-snippet">{{ result.snippet }}</div>
+                  <div v-if="result.parent" class="result-parent">
+                    in {{ result.parent.type === 'cycle' ? 'Cycle' : 'Template' }}: {{ result.parent.title }}
+                  </div>
+                </div>
+              </button>
+
+              <div v-if="result.metadata.historical_match_count" class="template-history">
+                <button
+                  type="button"
+                  class="history-toggle"
+                  @click.stop="toggleTemplateHistory(result.id)"
+                >
+                  {{ isTemplateHistoryOpen(result.id)
+                    ? 'Hide matching history'
+                    : `Show matching history (${result.metadata.historical_match_count})` }}
+                </button>
+
+                <div v-if="isTemplateHistoryOpen(result.id)" class="history-list">
+                  <button
+                    v-for="match in result.metadata.historical_matches"
+                    :key="`template-history-${match.id}`"
+                    type="button"
+                    class="history-row"
+                    @click="goToUrl(match.url)"
+                  >
+                    <div class="history-version">v{{ match.template_version }}</div>
+                    <div class="history-copy">
+                      <div class="history-title">{{ match.title }}</div>
+                      <div v-if="match.snippet" class="history-snippet">{{ match.snippet }}</div>
+                    </div>
+                  </button>
+                </div>
               </div>
             </div>
-          </button>
+
+            <button
+              v-else
+              type="button"
+              class="result-row"
+              @click="goToResult(result)"
+            >
+              <div class="result-type">{{ result.type }}</div>
+              <div class="result-copy">
+                <div class="result-title">{{ result.title }}</div>
+                <div v-if="result.snippet" class="result-snippet">{{ result.snippet }}</div>
+                <div v-if="result.parent" class="result-parent">
+                  in {{ result.parent.type === 'cycle' ? 'Cycle' : 'Template' }}: {{ result.parent.title }}
+                </div>
+              </div>
+            </button>
+          </template>
 
           <div v-if="group.has_more" class="more-note">More results available</div>
         </section>
@@ -418,6 +496,10 @@ onBeforeUnmount(() => {
   background: #fcfbff;
 }
 
+.template-result-card {
+  margin-bottom: 6px;
+}
+
 .result-type {
   min-width: 64px;
   padding-top: 1px;
@@ -429,6 +511,14 @@ onBeforeUnmount(() => {
 
 .result-copy {
   min-width: 0;
+  flex: 1;
+}
+
+.result-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .result-title {
@@ -437,8 +527,87 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
+.version-pill {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--violet-bg);
+  color: var(--violet);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.template-summary {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .result-snippet,
 .result-parent {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.template-history {
+  margin-top: 6px;
+  padding-left: 74px;
+}
+
+.history-toggle {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: var(--violet);
+  font-size: 12px;
+  font-family: var(--font-main);
+  cursor: pointer;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.history-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #fcfbff;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-main);
+}
+
+.history-row:hover {
+  border-color: #c4b5fd;
+}
+
+.history-version {
+  min-width: 36px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--violet);
+}
+
+.history-copy {
+  min-width: 0;
+}
+
+.history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.history-snippet {
   margin-top: 2px;
   font-size: 12px;
   color: var(--text-secondary);
