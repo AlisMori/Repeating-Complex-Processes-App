@@ -35,13 +35,26 @@ function locateTarget() {
     return
   }
 
-  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  // Instant scroll, not smooth — smooth scrolling takes a few
+  // hundred ms to finish, but a single requestAnimationFrame fires
+  // ~16ms later, long before that animation completes. Measuring
+  // getBoundingClientRect() at that point captures the element's
+  // pre-scroll (or mid-scroll) position, not where it actually ends
+  // up — confirmed empirically: this was producing offsets of over
+  // 1000px on a long page. The spotlight box itself already has its
+  // own CSS transition (see .tour-spotlight below), so scrolling
+  // instantly here doesn't lose any visual smoothness — the box
+  // still glides into place.
+  el.scrollIntoView({ block: 'center', behavior: 'auto' })
 
-  // Wait a tick for scroll to settle before measuring
+  // Wait two frames, not one, as a small extra safety margin in case
+  // anything else on the page (images, fonts) is still reflowing.
   requestAnimationFrame(() => {
-    const rect = el.getBoundingClientRect()
-    targetRect.value = rect
-    positionTooltip(rect)
+    requestAnimationFrame(() => {
+      const rect = el.getBoundingClientRect()
+      targetRect.value = rect
+      positionTooltip(rect)
+    })
   })
 }
 
@@ -52,26 +65,59 @@ function positionTooltip(rect) {
 
   let top, left
 
-  const spaceRight = vw - rect.right
-  const spaceLeft = rect.left
-  const spaceBelow = vh - rect.bottom
-
-  if (spaceRight > TOOLTIP_WIDTH + MARGIN * 2) {
-    // place to the right
-    left = rect.right + MARGIN
-    top = rect.top
-  } else if (spaceLeft > TOOLTIP_WIDTH + MARGIN * 2) {
-    // place to the left
+  // A step can force a specific side instead of relying on automatic
+  // space-detection below — needed for targets too large for any
+  // side to have enough room by the normal measure (e.g. the
+  // dashboard's full-width Gantt section), where the content author
+  // knows in advance which side actually works, even if it's tight.
+  const forced = currentStep.value?.position
+  if (forced === 'left') {
     left = rect.left - TOOLTIP_WIDTH - MARGIN
     top = rect.top
-  } else if (spaceBelow > cardHeight + MARGIN * 2) {
-    // place below
+  } else if (forced === 'right') {
+    left = rect.right + MARGIN
+    top = rect.top
+  } else if (forced === 'above') {
+    left = rect.left
+    top = rect.top - cardHeight - MARGIN
+  } else if (forced === 'below') {
     left = rect.left
     top = rect.bottom + MARGIN
   } else {
-    // place above
-    left = rect.left
-    top = rect.top - cardHeight - MARGIN
+    const spaceRight = vw - rect.right
+    const spaceLeft = rect.left
+    const spaceBelow = vh - rect.bottom
+    const spaceAbove = rect.top
+
+    if (spaceRight > TOOLTIP_WIDTH + MARGIN * 2) {
+      // place to the right
+      left = rect.right + MARGIN
+      top = rect.top
+    } else if (spaceLeft > TOOLTIP_WIDTH + MARGIN * 2) {
+      // place to the left
+      left = rect.left - TOOLTIP_WIDTH - MARGIN
+      top = rect.top
+    } else if (spaceBelow > cardHeight + MARGIN * 2) {
+      // place below
+      left = rect.left
+      top = rect.bottom + MARGIN
+    } else if (spaceAbove > cardHeight + MARGIN * 2) {
+      // place above — only if there's actually room; the old code
+      // used this as an unconditional last resort with no check,
+      // which for a target starting near the top of the viewport
+      // clamped straight back onto the target's own corner instead
+      // of avoiding it.
+      left = rect.left
+      top = rect.top - cardHeight - MARGIN
+    } else {
+      // The target is too large to fit the card beside it in any
+      // direction without overlap — anchor to a fixed, predictable
+      // viewport corner instead of clamping into the target's own
+      // bounds. Top-right, since the sidebar occupies the left edge
+      // and most wide dashboard sections leave that corner clear.
+      top = MARGIN
+      left = vw - TOOLTIP_WIDTH - MARGIN
+    }
   }
 
   // Clamp horizontally within viewport

@@ -99,6 +99,12 @@ const overdueTasksList = computed(() => {
 // ── GANTT DATA ──────────────────────────────────────────────
 const GANTT_PX_PER_DAY = 16
 
+// Tracked by a unique string key per bar (not object reference) —
+// the template Gantt chart hit a real bug where comparing hovered
+// bars by === silently failed to match even the correct object, so
+// this uses the same proven-reliable key-comparison approach.
+const hoveredBarKey = ref(null)
+
 const ganttData = computed(() => {
   if (runningCycles.value.length === 0) return null
 
@@ -110,6 +116,11 @@ const ganttData = computed(() => {
     for (const task of tasks) {
       if (task.calculated_start_date) allDates.push(new Date(task.calculated_start_date))
       if (task.calculated_end_date) allDates.push(new Date(task.calculated_end_date))
+    }
+    const activities = cycleActivitiesMap.value[cycle.cycle_id] || []
+    for (const act of activities) {
+      if (act.calculated_start_date) allDates.push(new Date(act.calculated_start_date))
+      if (act.calculated_end_date) allDates.push(new Date(act.calculated_end_date))
     }
   }
   if (allDates.length === 0) return null
@@ -155,13 +166,30 @@ const ganttData = computed(() => {
     const tasks = cycleTasksMap.value[cycle.cycle_id] || []
     const activities = cycleActivitiesMap.value[cycle.cycle_id] || []
 
-    // Cycle bar — from start_date to last task end_date
-    const taskEndDates = tasks.map(t => t.calculated_end_date).filter(Boolean).sort()
-    const cycleEnd = taskEndDates.length > 0 ? taskEndDates[taskEndDates.length - 1] : cycle.start_date
+    // Cycle bar — spans from the earliest start to the latest end
+    // among this cycle's own tasks AND activities (not cycle.start_date,
+    // which is just when the cycle was kicked off and may not match
+    // when its actual work begins or ends — e.g. an activity or a
+    // fixed-date task could easily start before, or run past, that
+    // date). Falls back to cycle.start_date only if there's truly
+    // nothing scheduled yet.
+    const allStartDates = [
+      ...tasks.map(t => t.calculated_start_date),
+      ...activities.map(a => a.calculated_start_date),
+    ].filter(Boolean).sort()
+    const allEndDates = [
+      ...tasks.map(t => t.calculated_end_date),
+      ...activities.map(a => a.calculated_end_date),
+    ].filter(Boolean).sort()
+
+    const cycleStart = allStartDates.length > 0 ? allStartDates[0] : cycle.start_date
+    const cycleEnd = allEndDates.length > 0 ? allEndDates[allEndDates.length - 1] : cycle.start_date
 
     const cycleBar = {
-      dayOffset: dateToDayOffset(cycle.start_date),
-      durationDays: dateDurationDays(cycle.start_date, cycleEnd),
+      dayOffset: dateToDayOffset(cycleStart),
+      durationDays: dateDurationDays(cycleStart, cycleEnd),
+      startDate: cycleStart,
+      endDate: cycleEnd,
     }
 
     // Activity bars — this cycle's own activities, same violet bar
@@ -441,7 +469,14 @@ onMounted(async () => {
                       <div
                         class="gantt-bar gantt-bar-cycle"
                         :style="{ left: (group.cycleBar.dayOffset * ganttData.pxPerDay) + 'px', width: Math.max(group.cycleBar.durationDays * ganttData.pxPerDay, 6) + 'px' }"
+                        @mouseenter.stop="hoveredBarKey = 'cycle-' + group.cycleId"
+                        @mouseleave.stop="hoveredBarKey = null"
                       ></div>
+                      <div
+                        v-if="hoveredBarKey === 'cycle-' + group.cycleId"
+                        class="gantt-bar-tooltip"
+                        :style="{ left: ((group.cycleBar.dayOffset + group.cycleBar.durationDays / 2) * ganttData.pxPerDay) + 'px' }"
+                      >{{ formatDate(group.cycleBar.startDate) }} → {{ formatDate(group.cycleBar.endDate) }}</div>
                     </div>
                     <div
                       v-for="bar in group.activityBars"
@@ -453,8 +488,14 @@ onMounted(async () => {
                       <div
                         class="gantt-bar gantt-bar-activity"
                         :style="{ left: (bar.dayOffset * ganttData.pxPerDay) + 'px', width: Math.max(bar.durationDays * ganttData.pxPerDay, 6) + 'px' }"
-                        :title="`${bar.name}: ${formatDate(bar.startDate)} → ${formatDate(bar.endDate)}`"
+                        @mouseenter.stop="hoveredBarKey = 'activity-' + bar.id"
+                        @mouseleave.stop="hoveredBarKey = null"
                       ></div>
+                      <div
+                        v-if="hoveredBarKey === 'activity-' + bar.id"
+                        class="gantt-bar-tooltip"
+                        :style="{ left: ((bar.dayOffset + bar.durationDays / 2) * ganttData.pxPerDay) + 'px' }"
+                      >{{ formatDate(bar.startDate) }} → {{ formatDate(bar.endDate) }}</div>
                     </div>
                     <div
                       v-for="bar in group.taskBars"
@@ -467,8 +508,14 @@ onMounted(async () => {
                         class="gantt-bar gantt-bar-task"
                         :class="taskBarClass(bar)"
                         :style="{ left: (bar.dayOffset * ganttData.pxPerDay) + 'px', width: Math.max(bar.durationDays * ganttData.pxPerDay, 6) + 'px' }"
-                        :title="`${bar.name}: ${formatDate(bar.startDate)} → ${formatDate(bar.endDate)}`"
+                        @mouseenter.stop="hoveredBarKey = 'task-' + bar.id"
+                        @mouseleave.stop="hoveredBarKey = null"
                       ></div>
+                      <div
+                        v-if="hoveredBarKey === 'task-' + bar.id"
+                        class="gantt-bar-tooltip"
+                        :style="{ left: ((bar.dayOffset + bar.durationDays / 2) * ganttData.pxPerDay) + 'px' }"
+                      >{{ formatDate(bar.startDate) }} → {{ formatDate(bar.endDate) }}</div>
                     </div>
                     <div class="gantt-content-cell gantt-group-divider-cell" style="height: 13px;"></div>
                   </template>
@@ -598,6 +645,50 @@ onMounted(async () => {
 .gantt-content { flex-shrink: 0; position: relative; }
 .gantt-content-cell { position: relative; box-sizing: border-box; cursor: pointer; }
 .gantt-content-cell:hover { background: rgba(124, 58, 237, 0.03); }
+
+/* Duration tooltip — same white/dark-text/shadow style used on the
+   template Gantt chart, for consistency across the app. Centered on
+   the hovered bar's own midpoint (not its raw left edge), same
+   reasoning as the template chart: a short bar's own width often
+   doesn't match the tooltip text's width, so centering on the
+   midpoint keeps it visually aligned regardless of bar length. */
+.gantt-bar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1E293B;
+  background: var(--white);
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  padding: 3px 9px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 6;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}
+.gantt-bar-tooltip::before {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border-light);
+}
+.gantt-bar-tooltip::after {
+  content: '';
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--white);
+}
 .gantt-group-divider-cell { cursor: default; }
 .gantt-group-divider-cell::after { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 1px; background: var(--border-light); }
 
