@@ -327,3 +327,240 @@ class SmartSearchApiTests(APITestCase):
         groups = {group["type"]: group for group in response.data["groups"]}
         self.assertEqual(groups["templates"]["results"][0]["title"], "Shared Exam Template")
         self.assertEqual(groups["tasks"]["results"][0]["title"], "Shared Exam Task")
+
+    def test_template_results_group_matching_versions_under_current_template(self):
+        root_template = Template.objects.create(
+            user=self.user,
+            template_name="Grouped Search Template",
+            description="Legacy onboarding wording",
+            is_public=False,
+            created_by_type="user",
+            template_version=1,
+            is_current_version=False,
+        )
+        current_template = Template.objects.create(
+            user=self.user,
+            template_name="Grouped Search Template",
+            description="Current onboarding workflow",
+            is_public=False,
+            created_by_type="user",
+            template_version=2,
+            parent_template=root_template,
+            is_current_version=True,
+        )
+        older_template = Template.objects.create(
+            user=self.user,
+            template_name="Grouped Search Template",
+            description="Legacy onboarding checklist",
+            is_public=False,
+            created_by_type="user",
+            template_version=3,
+            parent_template=root_template,
+            is_current_version=False,
+        )
+
+        response = self.client.get(self.url, {"q": "legacy onboarding", "context": "global", "scopes": "templates"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_count"], 1)
+
+        template_group = response.data["groups"][0]
+        self.assertEqual(template_group["type"], "templates")
+        self.assertEqual(template_group["count"], 1)
+
+        result = template_group["results"][0]
+        self.assertEqual(result["id"], current_template.template_id)
+        self.assertEqual(result["url"], f"/templates/{current_template.template_id}")
+        self.assertEqual(result["metadata"]["template_version"], 2)
+        self.assertFalse(result["metadata"]["current_match"])
+        self.assertEqual(result["metadata"]["summary"], "No match in current version")
+        self.assertEqual(result["metadata"]["historical_match_count"], 2)
+        self.assertEqual(
+            [item["template_version"] for item in result["metadata"]["historical_matches"]],
+            [3, 1],
+        )
+        self.assertEqual(
+            [item["id"] for item in result["metadata"]["historical_matches"]],
+            [older_template.template_id, root_template.template_id],
+        )
+
+    def test_notes_search_only_returns_note_field_matches(self):
+        desc_only_template = Template.objects.create(
+            user=self.user,
+            template_name="Description Match Template",
+            description="Calendar-only template description",
+            is_public=False,
+            created_by_type="user",
+        )
+        UserTemplate.objects.create(user=self.user, template=desc_only_template, access_type="owner")
+        TemplateTask.objects.create(
+            template=desc_only_template,
+            task_name="Description-only task",
+            description="Calendar-only task description",
+            day_offset=0,
+            duration_days=1,
+            is_mandatory=True,
+            note_text="",
+        )
+        TemplateActivity.objects.create(
+            template=desc_only_template,
+            activity_name="Description-only activity",
+            description="Calendar-only activity description",
+            start_offset_days=0,
+            end_offset_days=2,
+            note_text="",
+        )
+
+        response = self.client.get(self.url, {"q": "calendar-only", "context": "global", "scopes": "notes"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_count"], 0)
+        self.assertEqual(response.data["groups"], [])
+
+    def test_task_results_group_matching_versions_under_current_template(self):
+        root_template = Template.objects.create(
+            user=self.user,
+            template_name="Task Version Template",
+            description="Task lineage",
+            is_public=False,
+            created_by_type="user",
+            template_version=1,
+            is_current_version=False,
+        )
+        current_template = Template.objects.create(
+            user=self.user,
+            template_name="Task Version Template",
+            description="Task lineage current",
+            is_public=False,
+            created_by_type="user",
+            template_version=2,
+            parent_template=root_template,
+            is_current_version=True,
+        )
+        old_task = TemplateTask.objects.create(
+            template=root_template,
+            task_name="Versioned Checklist",
+            description="Historic audit workflow",
+            day_offset=5,
+            duration_days=2,
+            is_mandatory=True,
+            note_text="",
+        )
+        current_task = TemplateTask.objects.create(
+            template=current_template,
+            task_name="Versioned Checklist",
+            description="Current audit workflow",
+            day_offset=5,
+            duration_days=2,
+            is_mandatory=True,
+            note_text="",
+        )
+
+        response = self.client.get(self.url, {"q": "audit workflow", "context": "global", "scopes": "tasks"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_count"], 1)
+        result = response.data["groups"][0]["results"][0]
+        self.assertEqual(result["id"], current_task.template_task_id)
+        self.assertEqual(result["url"], f"/templates/{current_template.template_id}")
+        self.assertEqual(result["parent"]["id"], current_template.template_id)
+        self.assertEqual(result["metadata"]["summary"], "Matched in current version and 1 previous version")
+        self.assertEqual(result["metadata"]["historical_match_count"], 1)
+        self.assertEqual(result["metadata"]["historical_matches"][0]["id"], old_task.template_task_id)
+        self.assertEqual(result["metadata"]["historical_matches"][0]["template_version"], 1)
+
+    def test_activity_results_group_matching_versions_under_current_template(self):
+        root_template = Template.objects.create(
+            user=self.user,
+            template_name="Activity Version Template",
+            description="Activity lineage",
+            is_public=False,
+            created_by_type="user",
+            template_version=1,
+            is_current_version=False,
+        )
+        current_template = Template.objects.create(
+            user=self.user,
+            template_name="Activity Version Template",
+            description="Activity lineage current",
+            is_public=False,
+            created_by_type="user",
+            template_version=2,
+            parent_template=root_template,
+            is_current_version=True,
+        )
+        old_activity = TemplateActivity.objects.create(
+            template=root_template,
+            activity_name="Versioned Review Window",
+            description="Historic moderation pass",
+            start_offset_days=3,
+            end_offset_days=7,
+            note_text="",
+        )
+        current_activity = TemplateActivity.objects.create(
+            template=current_template,
+            activity_name="Versioned Review Window",
+            description="Current moderation pass",
+            start_offset_days=3,
+            end_offset_days=7,
+            note_text="",
+        )
+
+        response = self.client.get(self.url, {"q": "moderation pass", "context": "global", "scopes": "activities"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_count"], 1)
+        result = response.data["groups"][0]["results"][0]
+        self.assertEqual(result["id"], current_activity.template_activity_id)
+        self.assertEqual(result["url"], f"/templates/{current_template.template_id}")
+        self.assertEqual(result["metadata"]["summary"], "Matched in current version and 1 previous version")
+        self.assertEqual(result["metadata"]["historical_matches"][0]["id"], old_activity.template_activity_id)
+
+    def test_note_results_group_matching_versions_under_current_template(self):
+        root_template = Template.objects.create(
+            user=self.user,
+            template_name="Note Version Template",
+            description="Note lineage",
+            is_public=False,
+            created_by_type="user",
+            template_version=1,
+            is_current_version=False,
+        )
+        current_template = Template.objects.create(
+            user=self.user,
+            template_name="Note Version Template",
+            description="Note lineage current",
+            is_public=False,
+            created_by_type="user",
+            template_version=2,
+            parent_template=root_template,
+            is_current_version=True,
+        )
+        old_task = TemplateTask.objects.create(
+            template=root_template,
+            task_name="Versioned Note Task",
+            description="",
+            day_offset=2,
+            duration_days=1,
+            is_mandatory=True,
+            note_text="Historic board note",
+        )
+        current_task = TemplateTask.objects.create(
+            template=current_template,
+            task_name="Versioned Note Task",
+            description="",
+            day_offset=2,
+            duration_days=1,
+            is_mandatory=True,
+            note_text="Current board note",
+        )
+
+        response = self.client.get(self.url, {"q": "board note", "context": "global", "scopes": "notes"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["total_count"], 1)
+        result = response.data["groups"][0]["results"][0]
+        self.assertEqual(result["id"], current_task.template_task_id)
+        self.assertEqual(result["url"], f"/templates/{current_template.template_id}")
+        self.assertEqual(result["metadata"]["summary"], "Matched in current version and 1 previous version")
+        self.assertEqual(result["metadata"]["historical_matches"][0]["id"], old_task.template_task_id)

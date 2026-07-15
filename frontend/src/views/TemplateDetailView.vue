@@ -99,6 +99,7 @@ const noteModal = ref({ open: false, kind: null, item: null, text: '' })
 const noteLoading = ref(false)
 
 const templateId = computed(() => route.params.id)
+const isHistoricalVersion = computed(() => !!template.value && !template.value.is_current_version)
 
 
 async function loadTemplate() {
@@ -523,7 +524,7 @@ onMounted(async () => {
             <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
         </button>
-        <BaseButton variant="primary" size="sm" data-tour="tpl-detail-edit" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
+        <BaseButton v-if="!isHistoricalVersion" variant="primary" size="sm" data-tour="tpl-detail-edit" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -536,8 +537,8 @@ onMounted(async () => {
           </button>
           <div v-if="openMenuFor === 'template-actions'" class="row-menu-dropdown">
             <button type="button" class="row-menu-item" @click="downloadModal = { open: true, format: 'json' }; openMenuFor = null">Export</button>
-            <button type="button" class="row-menu-item" @click="onDuplicate(); openMenuFor = null">Duplicate</button>
-            <button type="button" class="row-menu-item row-menu-item-danger" @click="deleteModalOpen = true; openMenuFor = null">Delete</button>
+            <button v-if="!isHistoricalVersion" type="button" class="row-menu-item" @click="onDuplicate(); openMenuFor = null">Duplicate</button>
+            <button v-if="!isHistoricalVersion" type="button" class="row-menu-item row-menu-item-danger" @click="deleteModalOpen = true; openMenuFor = null">Delete</button>
           </div>
         </div>
       </div>
@@ -582,6 +583,9 @@ onMounted(async () => {
               >Make current</BaseButton>
             </div>
           </div>
+          <div v-if="isHistoricalVersion" class="history-banner">
+            Viewing a historical version. This page is read-only; use Make current to restore this version as the live template.
+          </div>
 
           <!-- CATEGORY: the one field editable directly here, no need to open Edit template -->
           <div class="category-row">
@@ -589,7 +593,8 @@ onMounted(async () => {
             <template v-if="!categoryEditing">
               <span v-if="template.category_name" class="meta-pill pill-category">{{ template.category_name }}</span>
               <span v-else class="category-none">Uncategorised</span>
-              <button type="button" class="category-edit-btn" @click="openCategoryEdit">Change</button>
+              <button v-if="!isHistoricalVersion" type="button" class="category-edit-btn" @click="openCategoryEdit">Change</button>
+              <span v-else class="category-readonly">Read-only on historical versions</span>
             </template>
             <template v-else-if="creatingCategory">
               <BaseInput v-model="newCategoryName" placeholder="New category name" class="category-select" @keyup.enter="onCreateCategoryInline" />
@@ -681,16 +686,16 @@ onMounted(async () => {
                         <div class="tag-row">
                           <span v-for="tag in tagsForActivity(act.template_activity_id)" :key="tag.assignmentId" class="tag-chip">
                             {{ tag.tag_name }}
-                            <button type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
+                            <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
                           </span>
-                          <BaseSelect v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
+                          <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
                             <option value="">+ Add tag</option>
                             <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
                           </BaseSelect>
-                          <button type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
                         </div>
                       </div>
-                      <div class="row-menu" @click.stop>
+                      <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
                         <button type="button" class="row-menu-trigger" @click="toggleMenu('activity-' + act.template_activity_id)">
                           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
                         </button>
@@ -729,16 +734,16 @@ onMounted(async () => {
                         <div class="tag-row">
                           <span v-for="tag in tagsForTask(task.template_task_id)" :key="tag.assignmentId" class="tag-chip">
                             {{ tag.tag_name }}
-                            <button type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
+                            <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
                           </span>
-                          <BaseSelect v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
+                          <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
                             <option value="">+ Add tag</option>
                             <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
                           </BaseSelect>
-                          <button type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
                         </div>
                       </div>
-                      <div class="row-menu" @click.stop>
+                      <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
                         <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
                           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
                         </button>
@@ -779,16 +784,16 @@ onMounted(async () => {
                       <div class="tag-row">
                         <span v-for="tag in tagsForTask(task.template_task_id)" :key="tag.assignmentId" class="tag-chip">
                           {{ tag.tag_name }}
-                          <button type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
                         </span>
-                        <BaseSelect v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
+                        <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
                           <option value="">+ Add tag</option>
                           <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
                         </BaseSelect>
-                        <button type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
+                        <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
                       </div>
                     </div>
-                    <div class="row-menu" @click.stop>
+                    <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
                       <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
                         <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
                       </button>
@@ -802,7 +807,9 @@ onMounted(async () => {
               </div>
             </div>
             <div v-if="tasks.length === 0 && activities.length === 0" class="empty-card">
-              No tasks or activities defined. Click Edit template to add some.
+              {{ isHistoricalVersion
+                ? 'No tasks or activities are stored on this historical version.'
+                : 'No tasks or activities defined. Click Edit template to add some.' }}
             </div>
 
             <!-- TAG MANAGEMENT -->
@@ -814,12 +821,13 @@ onMounted(async () => {
               <div class="tag-manage-body">
                 <span v-if="tags.length === 0 && suggestedTags.length === 0" class="task-meta">No tags yet — create one below, then attach it to any task or activity above.</span>
                 <span v-for="t in tags" :key="t.tag_id" class="tag-chip">{{ t.tag_name }}</span>
-                <div class="tag-create-row">
+                <div v-if="!isHistoricalVersion" class="tag-create-row">
                   <BaseInput v-model="newTagName" placeholder="New tag name" @keyup.enter="onCreateTag" />
                   <BaseButton variant="secondary" size="sm" :loading="tagLoading" @click="onCreateTag">Create tag</BaseButton>
                 </div>
+                <span v-else class="task-meta">Historical versions are read-only. Switch to the current version to create or assign tags.</span>
               </div>
-              <div v-if="suggestedTags.length > 0" class="tag-suggestions-row">
+              <div v-if="!isHistoricalVersion && suggestedTags.length > 0" class="tag-suggestions-row">
                 <span class="tag-suggestions-label">Quick add:</span>
                 <button
                   v-for="name in suggestedTags"
@@ -997,6 +1005,7 @@ onMounted(async () => {
 /* HEADER CARD */
 .info-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 20px 24px; }
 .info-card-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; gap: 16px; }
+.history-banner { margin-bottom: 18px; padding: 10px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-md); background: var(--bg-page); font-size: var(--font-label); color: var(--text-secondary); }
 .template-title { font-size: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; margin-bottom: 4px; }
 .template-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; }
 .meta-pills { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
@@ -1011,6 +1020,7 @@ onMounted(async () => {
 .category-none { font-size: var(--font-label); color: var(--text-muted); font-style: italic; }
 .category-edit-btn { font-size: var(--font-label); font-weight: 600; color: var(--violet); background: none; border: none; cursor: pointer; font-family: var(--font-main); padding: 0; }
 .category-edit-btn:hover { text-decoration: underline; }
+.category-readonly { font-size: var(--font-label); color: var(--text-muted); }
 .category-select { width: 220px; }
 .category-select :deep(.base-select) { height: 34px; }
 
