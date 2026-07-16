@@ -749,18 +749,41 @@ onMounted(loadCycle)
                         </div>
                       </div>
                     </div>
-                    <BaseSelect
-                      v-if="task.status !== 'completed' && task.status !== 'skipped'"
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button v-else class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
+                    <div class="status-actions">
+                      <button
+                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
+                        :key="opt.value"
+                        class="status-pill"
+                        :class="statusClass(opt.value)"
+                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                      >{{ opt.label }}</button>
+                      <button
+                        v-if="task.status === 'completed' || task.status === 'skipped'"
+                        class="status-pill"
+                        @click="updateTaskStatus(task.cycle_task_id, 'pending')"
+                      >Undo</button>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="col-side">
+            <div class="side-card">
+              <div class="side-card-title">Status summary</div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-pending);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ inProgressTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-skipped);"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
+            </div>
+            <div class="side-card">
+              <div class="side-card-title">Cycle info</div>
+              <div class="info-row"><span class="info-label">Status</span><span class="info-value">{{ cycle.status }}</span></div>
+              <div class="info-row"><span class="info-label">Start date</span><span class="info-value">{{ formatDate(cycle.start_date) }}</span></div>
+              <div class="info-row"><span class="info-label">End date</span><span class="info-value">{{ formatDate(endDate) }}</span></div>
+              <div class="info-row"><span class="info-label">Progress</span><span class="info-value">{{ progress }}%</span></div>
             </div>
           </div>
         </div>
@@ -955,11 +978,11 @@ onMounted(loadCycle)
           <div class="col-side">
             <div class="side-card">
               <div class="side-card-title">Status summary</div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-pending);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ inProgressTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#0F766E;"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--border);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-skipped);"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
             </div>
             <div class="side-card">
               <div class="side-card-title">Cycle info</div>
@@ -1240,12 +1263,13 @@ onMounted(loadCycle)
 .tc-mandatory { font-size: var(--font-hint); font-weight: 700; color: var(--danger); }
 .tc-fixed { font-size: var(--font-hint); font-weight: 700; color: #92400E; }
 
-.tc-status { font-size: var(--font-badge); font-weight: 500; padding: 3px 9px; border-radius: 4px; }
-.status-in-progress { background: var(--warning-bg); color: #92400E; }
-.status-overdue { background: var(--danger-bg); color: #B91C1C; }
-.status-skipped { background: #CCFBF1; color: #0F766E; }
-.status-pending { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
-.status-activity { background: var(--violet-bg); color: var(--violet); }
+.tc-status { font-size: var(--font-hint); font-weight: 600; padding: 4px 11px; border-radius: 12px; }
+.status-completed { background: var(--status-completed-badge-bg); color: var(--status-completed-badge-text); }
+.status-in-progress { background: var(--status-in-progress-badge-bg); color: var(--status-in-progress-badge-text); }
+.status-overdue { background: var(--status-overdue-badge-bg); color: var(--status-overdue-badge-text); }
+.status-skipped { background: var(--status-skipped-badge-bg); color: var(--status-skipped-badge-text); }
+.status-pending { background: var(--status-pending-badge-bg); color: var(--status-pending-badge-text); }
+.status-activity { background: var(--status-activity-badge-bg); color: var(--status-activity-badge-text); }
 
 .tc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .action-btn {
@@ -1315,23 +1339,20 @@ onMounted(loadCycle)
 .row-menu-item:hover { background: var(--bg-page); }
 .status-pill {
   font-size: var(--font-hint);
-  font-weight: 700;
-  padding: 5px 12px;
-  border-radius: 20px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 14px;
   cursor: pointer;
   font-family: var(--font-main);
-  border: 1.5px solid;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  border: 1px solid var(--border-light);
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.status-pill:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.18); filter: brightness(0.95); }
-.status-pill:active { transform: translateY(0); box-shadow: none; }
+.status-pill:hover { background: var(--white); border-color: var(--border); color: var(--text-primary); }
+.status-pill:active { background: var(--bg-page); }
 
-.status-pill.status-pending { border-color: #CBD5E1; }
-.status-pill.status-in-progress { border-color: #F4B740; }
-.status-pill.status-completed { background: #DCFCE7; border-color: #22C55E; color: #166534; }
-.status-pill.status-skipped { background: #FFFFFF; border-color: #94A3B8; color: #475569; }
-.status-pill.status-overdue { border-color: #FECACA; }
-.status-pill.pill-delay { background: #FFE7D8; color: #C2410C; border-color: #F97316; }
+.status-pill.pill-delay:hover { background: #FFE7D8; border-color: #F97316; color: #C2410C; }
 
 .task-detail { display: flex; flex-direction: column; gap: 10px; }
 .task-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }
