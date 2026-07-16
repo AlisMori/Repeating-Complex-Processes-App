@@ -403,11 +403,11 @@ onMounted(async () => {
               <div class="gantt-legend">
                 <span class="gl-item"><span class="gl-dot" style="background:#7C3AED;opacity:0.4;"></span>Cycle span</span>
                 <span class="gl-item"><span class="gl-dot" style="background:#7C3AED;"></span>Activity</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#CBD5E1;"></span>Pending</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#F59E0B;"></span>In progress</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#EF4444;"></span>Overdue</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#22C55E;"></span>Completed</span>
-                <span class="gl-item"><span class="gl-dot" style="background:#94A3B8;"></span>Skipped</span>
+                <span class="gl-item"><span class="gl-dot" style="background:var(--status-pending);"></span>Pending</span>
+                <span class="gl-item"><span class="gl-dot" style="background:var(--warning);"></span>In progress</span>
+                <span class="gl-item"><span class="gl-dot" style="background:var(--danger);"></span>Overdue</span>
+                <span class="gl-item"><span class="gl-dot" style="background:var(--success);"></span>Completed</span>
+                <span class="gl-item"><span class="gl-dot" style="background:var(--status-skipped);"></span>Skipped</span>
               </div>
             </div>
 
@@ -712,11 +712,11 @@ onMounted(async () => {
 .gantt-bar-activity { height: 16px; background: linear-gradient(90deg, #7C3AED 0%, #A78BFA 100%); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
 .gantt-bar-task { height: 16px; }
 
-.tb-pending { background: #CBD5E1; }
-.tb-in-progress { background: #F59E0B; }
-.tb-completed { background: #22C55E; }
-.tb-overdue { background: #EF4444; }
-.tb-skipped { background: #94A3B8; }
+.tb-pending { background: var(--status-pending); }
+.tb-in-progress { background: var(--warning); }
+.tb-completed { background: var(--success); }
+.tb-overdue { background: var(--danger); }
+.tb-skipped { background: var(--status-skipped); }
 .tb-mandatory { background: #7C3AED; }
 
 /* ── TWO COL ── */

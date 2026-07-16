@@ -774,32 +774,6 @@ onMounted(async () => {
                     </div>
                     <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
                   </div>
-                  <div v-if="tasks.length > 0" class="activity-task-group">
-                    <div class="field-label">Group tasks under this activity</div>
-                    <div class="field-hint">Only tasks that fit inside the date range above are shown. A task can only belong to one activity.</div>
-                    <div class="task-group-list">
-                      <label
-                        v-for="task in tasks.filter(t => taskFitsActivity(t, act) || act.groupedTaskLocalIds.includes(t._localId))"
-                        :key="task._localId"
-                        class="check-item task-group-item"
-                        :class="{ 'task-group-item-disabled': activityForTask(task._localId) && activityForTask(task._localId) !== act }"
-                      >
-                        <input
-                          type="checkbox"
-                          :checked="act.groupedTaskLocalIds.includes(task._localId)"
-                          :disabled="!!activityForTask(task._localId) && activityForTask(task._localId) !== act"
-                          @change="toggleTaskInActivity(act, task._localId)"
-                        />
-                        <span>
-                          {{ task.task_name || '(unnamed task)' }} <span class="task-group-day">Day {{ task.day_offset }}–{{ Number(task.day_offset) + Number(task.duration_days || 1) }}</span>
-                          <span v-if="act.groupedTaskLocalIds.includes(task._localId) && !taskFitsActivity(task, act)" class="task-group-warning">no longer fits — resize the activity or uncheck</span>
-                        </span>
-                      </label>
-                      <div v-if="tasks.filter(t => taskFitsActivity(t, act) || act.groupedTaskLocalIds.includes(t._localId)).length === 0" class="task-group-empty">
-                        No tasks currently fit inside this activity's date range.
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -878,6 +852,32 @@ onMounted(async () => {
                       <button type="button" class="tag-create-btn" :disabled="newTagLoading" @click="createNewTag">+ Add tag</button>
                     </div>
                     <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
+                  </div>
+                  <div v-if="activities.length > 0" class="activity-task-group">
+                    <div class="field-label">Link to activity</div>
+                    <div class="field-hint">Optional — group this task under an activity whose date range it fits inside. A task can only belong to one activity.</div>
+                    <div class="task-group-list">
+                      <label
+                        v-for="act in activities.filter(a => taskFitsActivity(task, a) || a.groupedTaskLocalIds.includes(task._localId))"
+                        :key="act._localId"
+                        class="check-item task-group-item"
+                        :class="{ 'task-group-item-disabled': activityForTask(task._localId) && activityForTask(task._localId) !== act }"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="act.groupedTaskLocalIds.includes(task._localId)"
+                          :disabled="!!activityForTask(task._localId) && activityForTask(task._localId) !== act"
+                          @change="toggleTaskInActivity(act, task._localId)"
+                        />
+                        <span>
+                          {{ act.activity_name || '(unnamed activity)' }} <span class="task-group-day">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</span>
+                          <span v-if="act.groupedTaskLocalIds.includes(task._localId) && !taskFitsActivity(task, act)" class="task-group-warning">no longer fits — resize the task or uncheck</span>
+                        </span>
+                      </label>
+                      <div v-if="activities.filter(a => taskFitsActivity(task, a) || a.groupedTaskLocalIds.includes(task._localId)).length === 0" class="task-group-empty">
+                        No activities currently fit this task's date range.
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
