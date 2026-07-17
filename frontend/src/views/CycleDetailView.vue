@@ -757,11 +757,6 @@ onMounted(loadCycle)
                         :class="statusClass(opt.value)"
                         @click="updateTaskStatus(task.cycle_task_id, opt.value)"
                       >{{ opt.label }}</button>
-                      <button
-                        v-if="task.status === 'completed' || task.status === 'skipped'"
-                        class="status-pill"
-                        @click="updateTaskStatus(task.cycle_task_id, 'pending')"
-                      >Undo</button>
                     </div>
                   </div>
                 </div>
@@ -950,7 +945,6 @@ onMounted(loadCycle)
                   </div>
                   <div class="tc-right">
                     <span class="tc-status status-completed">Completed</span>
-                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
                   </div>
                 </div>
               </div>
@@ -966,7 +960,6 @@ onMounted(loadCycle)
                   </div>
                   <div class="tc-right">
                     <span class="tc-status status-skipped">Skipped</span>
-                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
                   </div>
                 </div>
               </div>
@@ -1285,7 +1278,6 @@ onMounted(loadCycle)
 .action-btn:active { transform: translateY(0); box-shadow: none; }
 .action-complete { background: var(--success-bg); color: #15803D; border: 1px solid #BBF7D0; }
 .action-delay { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
-.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 
 /* ── STATUS ACTIONS ── */
 .status-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
