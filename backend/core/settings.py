@@ -201,3 +201,38 @@ Q_CLUSTER = {
     "bulk": 10,
     "orm": "default",
 }
+
+
+# Logging settings
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+
+    "formatters": {
+        "standard": {
+            "format": (
+                "%(asctime)s | "
+                "%(levelname)s | "
+                "%(name)s | "
+                "%(message)s"
+            ),
+        },
+    },
+
+    "handlers": {
+        "email_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": BASE_DIR / "logs" / "emails.log",
+            "formatter": "standard",
+        },
+    },
+
+    "loggers": {
+        "emails": {
+            "handlers": ["email_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
