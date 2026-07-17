@@ -10,7 +10,7 @@ def register_scheduler():
 
         defaults={
 
-            "schedule_type": Schedule.MINUTES,
+            "schedule_type": Schedule.DAILY,
 
             "repeats": -1,
 
