@@ -1,4 +1,5 @@
 from datetime import timedelta
+import logging
 
 from django.utils import timezone
 
@@ -12,6 +13,7 @@ from .services import (
 
 
 def check_notifications():
+    # Use unified timezone
     today = timezone.now().date()
 
     # Users who want to receive notifications would get them
@@ -41,18 +43,21 @@ def check_notifications():
 
                 check_reminder(
                     user,
+                    cycle,
                     task,
                     today
                 )
 
                 check_overdue(
                     user,
+                    cycle,
                     task,
                     today
                 )
 
 
-def check_reminder(user, task, today):
+def check_reminder(user, cycle, task, today):
+    logger = logging.getLogger("emails")
     # Ensure reminders are set and present
     if not task.reminder_lead_days:
         return
@@ -72,21 +77,23 @@ def check_reminder(user, task, today):
 
         # If program reaches here, reminder email is sent to user
         try:
+            send_reminder_email(user, cycle, task)
 
-            send_reminder_email(user, task)
-
-            # TODO:
             # Log successful reminder notification
-
+            logger.info(
+                f"Reminder sent | User={user.email} | Cycle={cycle.cycle_name} (ID={cycle.cycle_id}) | Task={task.task_name} (ID={task.cycle_task_id})"
+            )
 
         except Exception as e:
-
-            # TODO:
             # Log failed reminder notification
-            print(e)
+            logger.error(
+                f"Reminder failed | User={user.email} | "
+                f"Cycle={cycle.cycle_name} (ID={cycle.cycle_id}) | Task={task.task_name} (ID={task.cycle_task_id}) | Error={e}"
+            )
 
 
-def check_overdue(user, task, today):
+def check_overdue(user, cycle, task, today):
+    logger = logging.getLogger("emails")
     # Don't notify about tasks that are completed
     if task.status == "completed":
         return
@@ -96,14 +103,16 @@ def check_overdue(user, task, today):
         return
 
     try:
-
-        send_overdue_email(user, task)
-
+        send_overdue_email(user,cycle, task)
 
         # Log successful overdue notification
+        logger.info(
+            f"Overdue message sent | User={user.email} | Cycle={cycle.cycle_name} (ID={cycle.cycle_id}) | Task={task.task_name} (ID={task.cycle_task_id})"
+        )
 
     except Exception as e:
-
-
         # Log failed overdue notification
-        print(e)
+        logger.error(
+            f"Overdue message failed | User={user.email} | "
+            f"Cycle={cycle.cycle_name} (ID={cycle.cycle_id}) | Task={task.task_name} (ID={task.cycle_task_id}) | Error={e}"
+        )
