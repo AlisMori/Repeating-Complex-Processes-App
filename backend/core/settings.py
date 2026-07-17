@@ -202,6 +202,8 @@ Q_CLUSTER = {
     "orm": "default",
 }
 
+FRONTEND_URL = "http://localhost:5173"
+
 
 # Logging settings
 LOGGING = {
