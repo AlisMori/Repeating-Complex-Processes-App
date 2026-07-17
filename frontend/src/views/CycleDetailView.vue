@@ -111,10 +111,10 @@ function isOverdue(task) {
 // disagreed with what was actually in the database.
 const ALLOWED_TRANSITIONS = {
   pending: ['in_progress', 'skipped'],
-  in_progress: ['completed', 'skipped'],
+  in_progress: ['completed', 'skipped', 'pending'],
   overdue: ['in_progress', 'completed', 'skipped'],
-  completed: [],
-  skipped: [],
+  completed: ['pending'],
+  skipped: ['pending'],
 }
 
 function availableStatusOptions(task) {
@@ -757,11 +757,6 @@ onMounted(loadCycle)
                         :class="statusClass(opt.value)"
                         @click="updateTaskStatus(task.cycle_task_id, opt.value)"
                       >{{ opt.label }}</button>
-                      <button
-                        v-if="task.status === 'completed' || task.status === 'skipped'"
-                        class="status-pill"
-                        @click="updateTaskStatus(task.cycle_task_id, 'pending')"
-                      >Undo</button>
                     </div>
                   </div>
                 </div>
@@ -1285,7 +1280,6 @@ onMounted(loadCycle)
 .action-btn:active { transform: translateY(0); box-shadow: none; }
 .action-complete { background: var(--success-bg); color: #15803D; border: 1px solid #BBF7D0; }
 .action-delay { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
-.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 
 /* ── STATUS ACTIONS ── */
 .status-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
@@ -1353,6 +1347,7 @@ onMounted(loadCycle)
 .status-pill:active { background: var(--bg-page); }
 
 .status-pill.pill-delay:hover { background: #FFE7D8; border-color: #F97316; color: #C2410C; }
+.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 
 .task-detail { display: flex; flex-direction: column; gap: 10px; }
 .task-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }

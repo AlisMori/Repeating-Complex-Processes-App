@@ -16,10 +16,10 @@ SYSTEM_ONLY_STATUSES = {"overdue"}
 # to be needed later.
 ALLOWED_TRANSITIONS = {
     "pending": {"in_progress", "skipped"},
-    "in_progress": {"completed", "skipped"},
+    "in_progress": {"completed", "skipped", "pending"},
     "overdue": {"in_progress", "completed", "skipped"},
-    "completed": set(),
-    "skipped": set(),
+    "completed": {"pending"},
+    "skipped": {"pending"},
 }
 
 # The only two statuses a prerequisite can be retroactively closed out
