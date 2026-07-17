@@ -111,10 +111,10 @@ function isOverdue(task) {
 // disagreed with what was actually in the database.
 const ALLOWED_TRANSITIONS = {
   pending: ['in_progress', 'skipped'],
-  in_progress: ['completed', 'skipped'],
+  in_progress: ['completed', 'skipped', 'pending'],
   overdue: ['in_progress', 'completed', 'skipped'],
-  completed: [],
-  skipped: [],
+  completed: ['pending'],
+  skipped: ['pending'],
 }
 
 function availableStatusOptions(task) {
@@ -945,6 +945,7 @@ onMounted(loadCycle)
                   </div>
                   <div class="tc-right">
                     <span class="tc-status status-completed">Completed</span>
+                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
                   </div>
                 </div>
               </div>
@@ -960,6 +961,7 @@ onMounted(loadCycle)
                   </div>
                   <div class="tc-right">
                     <span class="tc-status status-skipped">Skipped</span>
+                    <button class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
                   </div>
                 </div>
               </div>
@@ -1345,6 +1347,7 @@ onMounted(loadCycle)
 .status-pill:active { background: var(--bg-page); }
 
 .status-pill.pill-delay:hover { background: #FFE7D8; border-color: #F97316; color: #C2410C; }
+.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
 
 .task-detail { display: flex; flex-direction: column; gap: 10px; }
 .task-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }
