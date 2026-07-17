@@ -51,7 +51,7 @@ const router = createRouter({
       component: PasswordResetRequestView,
     },
     {
-      path: '/auth/password-reset/confirm',
+      path: '/auth/password-reset/confirm/:uid/:token',
       name: 'password-reset-confirm',
       component: PasswordResetConfirmView,
     },

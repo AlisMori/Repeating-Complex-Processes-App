@@ -99,14 +99,14 @@ async function submit() {
 
       <h2 class="form-title">Check your email</h2>
       <p class="form-subtitle">
-        We sent a reset link to <strong>{{ form.email }}</strong>. The link expires in 30 minutes.
+        If an account exists for <strong>{{ form.email }}</strong>, a reset link is on the way.
       </p>
 
       <div class="info-box">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <p>If you don't see it, check your spam folder. Email comes from <strong>no-reply@recurra.murdoch.edu.au</strong></p>
+        <p>If you don't see it, check your spam folder and try again after a few minutes.</p>
       </div>
 
       <p class="resend-row">
