@@ -883,9 +883,12 @@ onMounted(async () => {
               </div>
             </div>
             <div v-if="step2Error" class="error-banner">{{ step2Error }}</div>
-            <div class="form-footer">
-              <BaseButton variant="secondary" size="sm" @click="skipToStep3">Skip — finish without tasks</BaseButton>
-              <BaseButton variant="primary" size="sm" :loading="step2Loading" @click="submitStep2">Save & set dependencies →</BaseButton>
+            <div class="form-footer form-footer-split">
+              <BaseButton variant="secondary" size="sm" @click="addTask">+ Add task</BaseButton>
+              <div class="form-footer-right">
+                <BaseButton variant="secondary" size="sm" @click="skipToStep3">Skip — finish without tasks</BaseButton>
+                <BaseButton variant="primary" size="sm" :loading="step2Loading" @click="submitStep2">Save & set dependencies →</BaseButton>
+              </div>
             </div>
           </div>
 
