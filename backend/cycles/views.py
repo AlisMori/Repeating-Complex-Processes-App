@@ -169,7 +169,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         if cycle_id:
             queryset = queryset.filter(cycle_id=cycle_id)
 
-        return queryset
+        return queryset.order_by("calculated_start_date", "cycle_task_id")
 
     def perform_create(self, serializer):
         from rest_framework.exceptions import PermissionDenied
@@ -406,7 +406,7 @@ class CycleActivityViewSet(viewsets.ModelViewSet):
         if cycle_id:
             queryset = queryset.filter(cycle_id=cycle_id)
 
-        return queryset
+        return queryset.order_by("calculated_start_date", "cycle_activity_id")
 
     def perform_update(self, serializer):
         # Only calculated_start_date/calculated_end_date can actually
