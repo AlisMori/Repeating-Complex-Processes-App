@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.db.models.signals import post_migrate
 
 
 class NotificationsConfig(AppConfig):
@@ -8,7 +9,10 @@ class NotificationsConfig(AppConfig):
     name = "notifications"
 
     def ready(self):
+        from .scheduler import register_scheduler_on_migrate
 
-        from .scheduler import register_scheduler
-
-        register_scheduler()
+        post_migrate.connect(
+            register_scheduler_on_migrate,
+            sender=self,
+            dispatch_uid="notifications.register_scheduler_on_migrate",
+        )
