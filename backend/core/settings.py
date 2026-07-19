@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     'cycles',
     'notifications',
     'templates_mgmt',
+    'dashboard',
 ]
 
 AUTH_USER_MODEL = "accounts.User"

@@ -204,6 +204,13 @@ class SlidingTokenRefreshSerializer(TokenRefreshSerializer):
         if not session_id or not refresh_jti:
             raise AuthenticationFailed("Invalid refresh token.")
 
+        # Tracks whether the session turned out to be inactive, so
+        # SessionInactive can be raised AFTER the atomic block below has
+        # committed. Raising it from inside the block would roll back
+        # the revoked_at save and the blacklist() call that happen right
+        session_became_inactive = False
+        data = None
+
         with transaction.atomic():
             try:
                 session = AuthSession.objects.select_for_update().get(
@@ -226,15 +233,18 @@ class SlidingTokenRefreshSerializer(TokenRefreshSerializer):
                     refresh.blacklist()
                 except TokenError:
                     pass
-                raise SessionInactive()
+                session_became_inactive = True
+            else:
+                data = super().validate(attrs)
 
-            data = super().validate(attrs)
+                rotated_refresh = data.get("refresh")
+                if rotated_refresh:
+                    rotated_token = RefreshToken(rotated_refresh)
+                    session.current_refresh_jti = rotated_token["jti"]
+                    session.save(update_fields=["current_refresh_jti"])
 
-            rotated_refresh = data.get("refresh")
-            if rotated_refresh:
-                rotated_token = RefreshToken(rotated_refresh)
-                session.current_refresh_jti = rotated_token["jti"]
-                session.save(update_fields=["current_refresh_jti"])
+        if session_became_inactive:
+            raise SessionInactive()
 
-            data.update(serialize_session_window(session))
-            return data
+        data.update(serialize_session_window(session))
+        return data
