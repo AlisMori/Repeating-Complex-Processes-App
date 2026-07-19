@@ -1,19 +1,16 @@
 from django_q.models import Schedule
-from django_q.tasks import schedule
 
 
 def register_scheduler():
-
-    Schedule.objects.get_or_create(
-
+    return Schedule.objects.update_or_create(
         func="notifications.tasks.check_notifications",
-
         defaults={
-
+            "name": "check_notifications",
             "schedule_type": Schedule.DAILY,
-
             "repeats": -1,
-
-        }
-
+        },
     )
+
+
+def register_scheduler_on_migrate(sender, apps, **kwargs):
+    register_scheduler()

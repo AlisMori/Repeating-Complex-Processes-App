@@ -210,7 +210,7 @@ const dependencyArrows = computed(() => {
     let path
     if (fromY === toY) {
       path = `M ${fromX} ${fromY} L ${Math.max(toX - 6, fromX)} ${toY}`
-    } else if (toX > fromX) {
+    } else if (toX >= fromX) {
       // Clamp the elbow so it always sits strictly between fromX and
       // toX, even when the gap is very small (dependent tasks are
       // often scheduled right up against each other). Without this,
@@ -379,7 +379,7 @@ const dependencyArrows = computed(() => {
 
 .gantt-scroll-row { display: flex; align-items: flex-start; padding: 14px 18px; overflow-x: auto; overflow-y: visible; position: relative; }
 
-.gantt-sidebar { position: sticky; left: 0; z-index: 2; flex-shrink: 0; background: var(--white); border-right: 1px solid var(--border-light); }
+.gantt-sidebar { position: sticky; left: 0; z-index: 10; flex-shrink: 0; background: var(--white); border-right: 1px solid var(--border-light); }
 
 /* TABLE HEADER ROW */
 .gantt-table-header { display: flex; align-items: center; border-bottom: 1.5px solid var(--border-light); background: var(--bg-page); }

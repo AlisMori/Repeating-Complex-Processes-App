@@ -41,11 +41,13 @@ async function loadTemplates() {
     const { data } = await getTemplates()
     templates.value = Array.isArray(data) ? data : (data.results || [])
 
-    // If coming from template detail with ?template=id pre-select it
     const preselect = route.query.template
     if (preselect) {
       const found = templates.value.find(t => String(t.template_id) === String(preselect))
-      if (found) await selectTemplate(found)
+      if (found) {
+        await selectTemplate(found)
+        proceedToStep2()
+      }
     }
   } catch (e) {
     console.error('Failed to load templates', e)

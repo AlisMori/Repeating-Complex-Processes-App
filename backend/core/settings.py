@@ -18,6 +18,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -69,6 +76,7 @@ INSTALLED_APPS = [
     'cycles',
     'notifications',
     'templates_mgmt',
+    'dashboard',
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -80,6 +88,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/hour"),
+        "password_reset_confirm": os.getenv("PASSWORD_RESET_CONFIRM_THROTTLE_RATE", "10/hour"),
+    },
 }
 
 SIMPLE_JWT = {
@@ -170,17 +182,15 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # while development
-
-# EMAIL_HOST = os.getenv("EMAIL_HOST")
-# EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
-# EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS") == "True"
-#
-# EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-# EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
+PASSWORD_RESET_TIMEOUT = 60 * 30
 
 
 # django-q2, background job runner (mark_overdue_tasks, Module 9).
@@ -202,7 +212,7 @@ Q_CLUSTER = {
     "orm": "default",
 }
 
-FRONTEND_URL = "http://localhost:5173"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 
 # Logging settings

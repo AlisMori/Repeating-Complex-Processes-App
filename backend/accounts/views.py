@@ -1,8 +1,15 @@
 from rest_framework import permissions, status
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from .password_reset import (
+    PASSWORD_RESET_TOKEN_STATUS_EXPIRED,
+    PASSWORD_RESET_TOKEN_STATUS_VALID,
+    get_password_reset_token_status,
+    get_user_from_password_reset_uid,
+)
 from .auth_sessions import (
     build_token_payload,
     serialize_session_window,
@@ -121,6 +128,8 @@ class SlidingTokenRefreshView(TokenRefreshView):
 
 class PasswordResetView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(
@@ -143,15 +152,47 @@ class PasswordResetView(APIView):
 
 class PasswordResetConfirmView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset_confirm"
 
     def get(self, request, uidb64=None, token=None):
+        user = get_user_from_password_reset_uid(uidb64)
+        if user is None:
+            return Response(
+                {
+                    "code": "invalid_link",
+                    "detail": "This password reset link is invalid.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        token_status = get_password_reset_token_status(user, token)
+        if token_status == PASSWORD_RESET_TOKEN_STATUS_VALID:
+            return Response(
+                {
+                    "code": "valid_link",
+                    "detail": "This password reset link is valid.",
+                    "uid": uidb64,
+                    "token": token,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if token_status == PASSWORD_RESET_TOKEN_STATUS_EXPIRED:
+            return Response(
+                {
+                    "code": "expired_link",
+                    "detail": "This password reset link has expired.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         return Response(
             {
-                "uid": uidb64,
-                "token": token,
-                "detail": "Submit this uid and token to POST /api/auth/password-reset/confirm/ with a new password.",
+                "code": "invalid_link",
+                "detail": "This password reset link is invalid.",
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     def post(self, request, uidb64=None, token=None):
@@ -164,7 +205,16 @@ class PasswordResetConfirmView(APIView):
         serializer = PasswordResetConfirmSerializer(data=payload)
 
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            errors = dict(serializer.errors)
+            token_errors = errors.get("token", [])
+            uid_errors = errors.get("uid", [])
+
+            if "This reset link has expired." in token_errors:
+                errors["code"] = "expired_link"
+            elif "Invalid reset link." in token_errors or "Invalid reset link." in uid_errors:
+                errors["code"] = "invalid_link"
+
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 
         serializer.save()
 

@@ -17,6 +17,7 @@ import {
   getTaskTags, getActivityTags,
   getTemplateCategories, createTemplateCategory,
   saveTemplateStructure,
+  getTags, createTag,
 } from '@/api/templates'
 import { getErrorMessage } from '@/utils/apiErrors'
 
@@ -195,6 +196,40 @@ async function submitStep1() {
 const tasks = ref([])
 const activities = ref([])
 const step2Loading = ref(false)
+
+// One shared tag pool for both tasks and activities, matching the
+// backend design — Tag itself has no task/activity split, only the
+// assignment (which task or activity it's attached to) does.
+const availableTags = ref([])
+const newTagName = ref('')
+const newTagLoading = ref(false)
+const newTagError = ref('')
+
+async function loadTags() {
+  try {
+    const { data } = await getTags()
+    availableTags.value = Array.isArray(data) ? data : (data.results || [])
+  } catch {
+    // Non-critical — tag checkboxes just won't have options if this fails.
+  }
+}
+
+async function createNewTag() {
+  const name = newTagName.value.trim()
+  if (!name) return
+  newTagLoading.value = true
+  newTagError.value = ''
+  try {
+    const { data } = await createTag({ tag_name: name })
+    availableTags.value.push(data)
+    newTagName.value = ''
+  } catch (e) {
+    newTagError.value = e.response?.data?.tag_name?.[0] || 'Failed to create tag.'
+  } finally {
+    newTagLoading.value = false
+  }
+}
+
 const step2Error = ref('')
 
 // Stable per-item ids, independent of array position, so a task can
@@ -218,6 +253,7 @@ function addTask() {
     day_offset: tasks.value.length === 0 ? 0 : Math.max(...tasks.value.map(t => Number(t.day_offset))) + 1,
     duration_days: 1, is_mandatory: false, is_fixed_date: false,
     reminder_7: false, reminder_3: false, reminder_0: false, note_text: '',
+    _tagIds: [],
   })
 }
 
@@ -237,6 +273,7 @@ function addActivity() {
     start_offset_days: 0,
     end_offset_days: activities.value.length === 0 ? 30 : Math.max(...activities.value.map(a => Number(a.end_offset_days))) + 10,
     note_text: '',
+    _tagIds: [],
     groupedTaskLocalIds: [],
   })
 }
@@ -280,6 +317,7 @@ async function submitStep2() {
   }
   for (const act of activities.value) {
     if (!act.activity_name.trim()) { step2Error.value = 'All activities must have a name.'; return }
+    if (Number(act.start_offset_days) < 0) { step2Error.value = `Activity "${act.activity_name}" start day cannot be negative.`; return }
     if (Number(act.end_offset_days) <= Number(act.start_offset_days)) {
       step2Error.value = `Activity "${act.activity_name}" end day must be after start day.`; return
     }
@@ -584,6 +622,7 @@ onMounted(async () => {
   } catch {
     categories.value = []
   }
+  await loadTags()
   await loadExistingTemplate()
 })
 </script>
@@ -672,6 +711,72 @@ onMounted(async () => {
         <!-- ── STEP 2 ── -->
         <div v-if="step === 2" class="two-panel">
           <div class="panel-left">
+	    <!-- ACTIVITIES (created first, so tasks below can link to one) -->
+            <div class="form-card">
+              <div class="form-card-header">
+                <div>
+                  <div class="form-card-title">Activities</div>
+                  <div class="form-card-desc">Non-actionable spans that group a period. E.g. "Teaching the unit" spanning the whole semester. Create these first so tasks below can be linked to one.</div>
+                </div>
+                <BaseButton variant="secondary" size="sm" @click="addActivity">+ Add activity</BaseButton>
+              </div>
+              <div class="form-body">
+                <div v-if="activities.length === 0" class="empty-section">No activities yet — click "Add activity" to start.</div>
+                <div v-for="(act, idx) in activities" :key="act._localId" class="item-card">
+                  <div class="item-card-header">
+                    <span class="item-number">Activity {{ idx + 1 }}</span>
+                    <button class="remove-btn" @click="removeActivity(idx)">✕ Remove</button>
+                  </div>
+                  <div class="item-grid">
+                    <div class="field"><BaseInput v-model="act.activity_name" label="Activity name *" placeholder="e.g. Teaching the unit" /></div>
+                    <div class="field"><BaseInput v-model="act.description" label="Description" placeholder="Optional" /></div>
+                  </div>
+                  <div class="item-grid two-col">
+                    <div class="field">
+                      <BaseInput
+                        v-model="act.start_offset_days"
+                        label="Start day *"
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        hint="Days from cycle start"
+                      />
+                    </div>
+                    <div class="field">
+                      <BaseInput
+                        v-model="act.end_offset_days"
+                        label="End day *"
+                        type="number"
+                        min="0"
+                        placeholder="1"
+                        hint="Must be after start day"
+                      />
+                    </div>
+                  </div>
+                  <div class="tag-section">
+                    <label class="field-label">Tags</label>
+                    <div v-if="availableTags.length === 0" class="tag-empty-hint">No tags yet — create one below.</div>
+                    <div v-else class="tag-checks">
+                      <label v-for="tag in availableTags" :key="tag.tag_id" class="check-item tag-check-item">
+                        <input type="checkbox" :value="tag.tag_id" v-model="act._tagIds" />
+                        <span>{{ tag.tag_name }}</span>
+                      </label>
+                    </div>
+                    <div class="tag-create-row">
+                      <input
+                        v-model="newTagName"
+                        type="text"
+                        class="tag-create-input"
+                        placeholder="New tag name"
+                        @keyup.enter="createNewTag"
+                      />
+                      <button type="button" class="tag-create-btn" :disabled="newTagLoading" @click="createNewTag">+ Add tag</button>
+                    </div>
+                    <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <!-- TASKS -->
             <div class="form-card">
@@ -699,6 +804,7 @@ onMounted(async () => {
                         v-model="task.day_offset"
                         label="Days from cycle start *"
                         type="number"
+                        min="0"
                         placeholder="0"
                         hint="0 = first day of the cycle"
                       />
@@ -726,58 +832,34 @@ onMounted(async () => {
                     <label class="check-item"><input type="checkbox" v-model="task.is_mandatory" /><span>Mandatory task</span></label>
                     <label class="check-item"><input type="checkbox" v-model="task.is_fixed_date" /><span>Fixed end date (cannot be shifted by delays)</span></label>
                   </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- ACTIVITIES -->
-            <div class="form-card">
-              <div class="form-card-header">
-                <div>
-                  <div class="form-card-title">Activities</div>
-                  <div class="form-card-desc">Non-actionable spans that group a period. E.g. "Teaching the unit" spanning the whole semester.</div>
-                </div>
-                <BaseButton variant="secondary" size="sm" @click="addActivity">+ Add activity</BaseButton>
-              </div>
-              <div class="form-body">
-                <div v-if="activities.length === 0" class="empty-section">No activities yet — click "Add activity" to start.</div>
-                <div v-for="(act, idx) in activities" :key="act._localId" class="item-card">
-                  <div class="item-card-header">
-                    <span class="item-number">Activity {{ idx + 1 }}</span>
-                    <button class="remove-btn" @click="removeActivity(idx)">✕ Remove</button>
-                  </div>
-                  <div class="item-grid">
-                    <div class="field"><BaseInput v-model="act.activity_name" label="Activity name *" placeholder="e.g. Teaching the unit" /></div>
-                    <div class="field"><BaseInput v-model="act.description" label="Description" placeholder="Optional" /></div>
-                  </div>
-                  <div class="item-grid two-col">
-                    <div class="field">
-                      <BaseInput
-                        v-model="act.start_offset_days"
-                        label="Start day *"
-                        type="number"
-                        placeholder="0"
-                        hint="Days from cycle start"
-                      />
+                  <div class="tag-section">
+                    <label class="field-label">Tags</label>
+                    <div v-if="availableTags.length === 0" class="tag-empty-hint">No tags yet — create one below.</div>
+                    <div v-else class="tag-checks">
+                      <label v-for="tag in availableTags" :key="tag.tag_id" class="check-item tag-check-item">
+                        <input type="checkbox" :value="tag.tag_id" v-model="task._tagIds" />
+                        <span>{{ tag.tag_name }}</span>
+                      </label>
                     </div>
-                    <div class="field">
-                      <BaseInput
-                        v-model="act.end_offset_days"
-                        label="End day *"
-                        type="number"
-                        placeholder="1"
-                        hint="Must be after start day"
+                    <div class="tag-create-row">
+                      <input
+                        v-model="newTagName"
+                        type="text"
+                        class="tag-create-input"
+                        placeholder="New tag name"
+                        @keyup.enter="createNewTag"
                       />
+                      <button type="button" class="tag-create-btn" :disabled="newTagLoading" @click="createNewTag">+ Add tag</button>
                     </div>
+                    <div v-if="newTagError" class="tag-create-error">{{ newTagError }}</div>
                   </div>
-
-                  <div v-if="tasks.length > 0" class="activity-task-group">
-                    <div class="field-label">Group tasks under this activity</div>
-                    <div class="field-hint">Only tasks that fit inside the date range above are shown. A task can only belong to one activity.</div>
+                  <div v-if="activities.length > 0" class="activity-task-group">
+                    <div class="field-label">Link to activity</div>
+                    <div class="field-hint">Optional — group this task under an activity whose date range it fits inside. A task can only belong to one activity.</div>
                     <div class="task-group-list">
                       <label
-                        v-for="task in tasks.filter(t => taskFitsActivity(t, act) || act.groupedTaskLocalIds.includes(t._localId))"
-                        :key="task._localId"
+                        v-for="act in activities.filter(a => taskFitsActivity(task, a) || a.groupedTaskLocalIds.includes(task._localId))"
+                        :key="act._localId"
                         class="check-item task-group-item"
                         :class="{ 'task-group-item-disabled': activityForTask(task._localId) && activityForTask(task._localId) !== act }"
                       >
@@ -788,23 +870,25 @@ onMounted(async () => {
                           @change="toggleTaskInActivity(act, task._localId)"
                         />
                         <span>
-                          {{ task.task_name || '(unnamed task)' }} <span class="task-group-day">Day {{ task.day_offset }}–{{ Number(task.day_offset) + Number(task.duration_days || 1) }}</span>
-                          <span v-if="act.groupedTaskLocalIds.includes(task._localId) && !taskFitsActivity(task, act)" class="task-group-warning">no longer fits — resize the activity or uncheck</span>
+                          {{ act.activity_name || '(unnamed activity)' }} <span class="task-group-day">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</span>
+                          <span v-if="act.groupedTaskLocalIds.includes(task._localId) && !taskFitsActivity(task, act)" class="task-group-warning">no longer fits — resize the task or uncheck</span>
                         </span>
                       </label>
-                      <div v-if="tasks.filter(t => taskFitsActivity(t, act) || act.groupedTaskLocalIds.includes(t._localId)).length === 0" class="task-group-empty">
-                        No tasks currently fit inside this activity's date range.
+                      <div v-if="activities.filter(a => taskFitsActivity(task, a) || a.groupedTaskLocalIds.includes(task._localId)).length === 0" class="task-group-empty">
+                        No activities currently fit this task's date range.
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-
             <div v-if="step2Error" class="error-banner">{{ step2Error }}</div>
-            <div class="form-footer">
-              <BaseButton variant="secondary" size="sm" @click="skipToStep3">Skip — finish without tasks</BaseButton>
-              <BaseButton variant="primary" size="sm" :loading="step2Loading" @click="submitStep2">Save & set dependencies →</BaseButton>
+            <div class="form-footer form-footer-split">
+              <BaseButton variant="secondary" size="sm" @click="addTask">+ Add task</BaseButton>
+              <div class="form-footer-right">
+                <BaseButton variant="secondary" size="sm" @click="skipToStep3">Skip — finish without tasks</BaseButton>
+                <BaseButton variant="primary" size="sm" :loading="step2Loading" @click="submitStep2">Save & set dependencies →</BaseButton>
+              </div>
             </div>
           </div>
 
@@ -981,6 +1065,19 @@ onMounted(async () => {
 .item-grid.three-col { grid-template-columns: 1fr 1fr 1fr; }
 .item-grid.two-col { grid-template-columns: 1fr 1fr; }
 .item-checks { display: flex; gap: 20px; flex-wrap: wrap; }
+
+/* TAGS */
+.tag-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border-light); }
+.activity-link-select :deep(.base-select) { height: 40px; padding: 0 30px 0 12px; background: #FAFAFA; }
+.tag-empty-hint { font-size: var(--font-hint); color: var(--text-muted); }
+.tag-checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.tag-check-item { font-size: var(--font-hint); }
+.tag-create-row { display: flex; gap: 8px; margin-top: 4px; }
+.tag-create-input { flex: 1; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); font-size: var(--font-label); font-family: var(--font-main); background: #FAFAFA; color: var(--text-primary); outline: none; }
+.tag-create-input:focus { border-color: var(--violet); background: var(--white); }
+.tag-create-btn { font-size: var(--font-label); font-weight: 500; color: var(--violet); background: var(--violet-bg); border: none; border-radius: var(--radius-md); padding: 0 14px; cursor: pointer; font-family: var(--font-main); white-space: nowrap; }
+.tag-create-btn:disabled { opacity: 0.6; cursor: default; }
+.tag-create-error { font-size: var(--font-hint); color: var(--danger); }
 .check-item { display: flex; align-items: center; gap: 8px; font-size: var(--font-label); color: var(--text-secondary); cursor: pointer; }
 .check-item input { accent-color: var(--violet); width: 15px; height: 15px; cursor: pointer; }
 

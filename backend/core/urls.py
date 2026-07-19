@@ -24,4 +24,5 @@ urlpatterns = [
     path("api/search/", SearchView.as_view(), name="smart-search"),
     path("api/", include("templates_mgmt.urls")),
     path("api/", include("cycles.urls")),
+    path("api/", include("dashboard.urls")),
 ]

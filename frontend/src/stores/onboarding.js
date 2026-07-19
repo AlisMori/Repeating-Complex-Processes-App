@@ -1,5 +1,5 @@
 // ============================================
-//   RECURRA — ONBOARDING STORE (v2)
+//   RECURRA — ONBOARDING STORE (v3)
 //   /frontend/src/stores/onboarding.js
 //
 //   Supports multiple independent tours, one per
@@ -19,12 +19,13 @@ const TOUR_DEFINITIONS = {
     { key: 'dashboard', title: 'Dashboard', body: 'Your home screen. See every running cycle, what\'s due today, and overdue tasks at a glance.' },
     { key: 'cycles', title: 'Cycles', body: 'A cycle is a running instance of a process — like this semester\'s teaching schedule. Open one to see its full timeline.' },
     { key: 'templates', title: 'Templates', body: 'Templates are reusable blueprints. Build one once, then start a new cycle from it any time you need to repeat the process.' },
+    { key: 'tags', title: 'Tags', body: 'Manage the tags you use to label tasks and activities across every template — create, rename, or delete them here.' },
     { key: 'user-menu', title: "You're all set", body: 'Find your account settings here, and you can replay any tour anytime from the Help button.' },
   ],
   dashboard: [
     { key: 'dash-stats', title: 'Your stats at a glance', body: 'These cards show running cycles, what\'s due today, overdue tasks, and what you\'ve completed this week.' },
     { key: 'dash-alert', title: 'Overdue alerts', body: 'If anything is overdue, it shows up here first so you never miss it.' },
-    { key: 'dash-cycles', title: 'Running cycles', body: 'Each card is a live process. Click one to open its full timeline and update tasks.' },
+    { key: 'dash-cycles', title: 'Running cycles timeline', body: 'A Gantt view across every running cycle at once. Hover any bar to see its exact start and end date, and click one to jump straight into that cycle.', position: 'left' },
     { key: 'dash-upcoming', title: 'Upcoming tasks', body: 'A quick list of what\'s coming up next across all your cycles.' },
   ],
   cycles: [
@@ -33,9 +34,19 @@ const TOUR_DEFINITIONS = {
     { key: 'cycles-card', title: 'Cycle cards', body: 'Each card shows progress, task counts, and dates. Click anywhere on a card to open it.' },
   ],
   templates: [
-    { key: 'tpl-new', title: 'Create a template', body: 'A template is a reusable blueprint — build it once, then use it to start as many cycles as you need.' },
-    { key: 'tpl-card', title: 'Template cards', body: 'Each card shows the task count, duration, and category. Duplicate, share, or use it to start a cycle.' },
-    { key: 'tpl-shared', title: 'Shared with you', body: 'Templates other people have shared with you appear here — accept to get your own independent copy.' },
+    { key: 'tpl-new', title: 'Create a template', body: 'A template is a reusable blueprint — build it once, then use it to start as many cycles as you need. Activities come first, then tasks, so you can link each task to the activity it belongs to.' },
+    { key: 'tpl-filter', title: 'Filter and group', body: 'Current shows only the latest version of each template; All shows every version, including ones you\'ve since edited past. Group by category to organize a large library.' },
+    { key: 'tpl-card', title: 'Template cards', body: 'Each card shows the task count, duration, and category. Duplicate, export, or use it to start a cycle straight from here.' },
+  ],
+  'template-detail': [
+    { key: 'tpl-detail-versions', title: 'Other versions', body: 'Every time you edit a template, the old version is kept, not overwritten. Switch to any past version here, and use "Make current" to promote one back to the default.' },
+    { key: 'tpl-detail-view-toggle', title: 'List or Gantt', body: 'Switch between a list of tasks and activities, or a visual timeline showing exactly how they\'re scheduled relative to each other.' },
+    { key: 'tpl-detail-list', title: 'Tasks and activities', body: 'Activities are grouped with the tasks linked to them. Click the ⋯ on any row to add a note, assign tags, or delete it.' },
+    { key: 'tpl-detail-actions', title: 'More actions', body: 'Export, duplicate, or delete this template from here.' },
+  ],
+  tags: [
+    { key: 'tags-create', title: 'Create a tag', body: 'Type a name and create a tag — you\'ll then be able to assign it to any task or activity inside a template.' },
+    { key: 'tags-list', title: 'Manage your tags', body: 'Renaming a tag creates a new one, leaving the original and everything already tagged with it untouched. A tag can only be deleted once nothing is tagged with it anymore.' },
   ],
 }
 

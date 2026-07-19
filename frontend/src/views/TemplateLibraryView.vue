@@ -26,6 +26,8 @@ const toast = useToastStore()
 const templates = ref([])
 const loading = ref(false)
 const error = ref('')
+const showAllVersions = ref(false)
+
 const searchQuery = ref('')
 const groupByCategory = ref(false)
 const shareModal = ref({ open: false, templateId: null, username: '' })
@@ -61,14 +63,19 @@ async function loadTemplates() {
   loading.value = true
   error.value = ''
   try {
-    const { data } = await getTemplates(searchQuery.value)
-    // Backend returns an array or paginated { results: [] }
+    const { data } = await getTemplates(searchQuery.value, { allVersions: showAllVersions.value })
     templates.value = Array.isArray(data) ? data : (data.results || [])
   } catch (e) {
     error.value = getErrorMessage(e, 'Failed to load templates. Please try again.')
   } finally {
     loading.value = false
   }
+}
+
+function setVersionFilter(showAll) {
+  if (showAllVersions.value === showAll) return
+  showAllVersions.value = showAll
+  loadTemplates()
 }
 
 async function onDuplicate(id) {
@@ -191,8 +198,12 @@ onMounted(async () => {
       <!-- LOADING -->
       <div v-if="loading" class="loading-msg">Loading templates...</div>
 
-      <!-- TEMPLATE COUNT + GROUP TOGGLE -->
+      <!-- FILTER + GROUP TOGGLE -->
       <div class="filter-row">
+      <div class="filter-tabs">
+          <div class="filter-tab" :class="{ active: showAllVersions }" @click="setVersionFilter(true)">All</div>
+          <div class="filter-tab" :class="{ active: !showAllVersions }" @click="setVersionFilter(false)">Current</div>
+        </div>
         <button type="button" class="group-toggle-btn" :class="{ active: groupByCategory }" @click="groupByCategory = !groupByCategory">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
           Group by category
@@ -258,7 +269,7 @@ onMounted(async () => {
               </div>
 
               <div class="tc-name">{{ tpl.template_name }}</div>
-              <div class="tc-desc">{{ tpl.description || 'No description.' }}</div>
+              <div class="tc-desc" :title="tpl.description || ''">{{ tpl.description || 'No description.' }}</div>
 
               <div class="tc-footer">
                 <div>
@@ -317,7 +328,7 @@ onMounted(async () => {
           </div>
 
           <div class="tc-name">{{ tpl.template_name }}</div>
-          <div class="tc-desc">{{ tpl.description || 'No description.' }}</div>
+          <div class="tc-desc" :title="tpl.description || ''">{{ tpl.description || 'No description.' }}</div>
 
           <div class="tc-footer">
             <div>
@@ -398,7 +409,10 @@ onMounted(async () => {
 .error-box { background: var(--danger-bg); border: 1px solid #FECACA; border-radius: var(--radius-md); padding: 12px 16px; font-size: var(--font-label); color: #B91C1C; }
 .loading-msg { font-size: var(--font-label); color: var(--text-muted); padding: 20px 0; }
 
-.filter-row { display: flex; align-items: center; justify-content: flex-end; }
+.filter-row { display: flex; align-items: center; justify-content: space-between; }
+.filter-tabs { display: flex; gap: 6px; }
+.filter-tab { padding: 7px 16px; border-radius: 6px; font-size: var(--font-label); font-weight: 500; cursor: pointer; border: 1px solid var(--border-light); color: var(--text-secondary); background: var(--white); }
+.filter-tab.active { background: var(--violet-bg); color: var(--violet); border-color: #DDD6FE; }
 .filter-count { font-size: var(--font-upper); color: var(--text-muted); }
 
 .group-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: var(--font-label); font-weight: 500; cursor: pointer; border: 1px solid var(--border-light); color: var(--text-secondary); background: var(--white); font-family: var(--font-main); }
@@ -430,7 +444,19 @@ onMounted(async () => {
 .tc-menu-btn-danger:hover svg { stroke: var(--danger); }
 
 .tc-name { font-size: var(--font-label); font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-.tc-desc { font-size: var(--font-label); color: var(--text-muted); line-height: 1.5; margin-bottom: 14px; flex: 1; }
+.tc-desc {
+  font-size: var(--font-label);
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 .tc-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid var(--border-light); margin-top: auto; }
 .tc-version { font-size: var(--font-label); color: var(--text-muted); margin-bottom: 5px; }

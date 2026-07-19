@@ -1,12 +1,11 @@
 <!-- /frontend/src/views/CycleDetailView.vue -->
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
-import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import BaseDatePicker from '@/components/ui/BaseDatePicker.vue'
 import CycleGanttChart from '@/components/CycleGanttChart.vue'
@@ -31,6 +30,20 @@ const toast = useToastStore()
 
 const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
+
+// Overflow "⋯" menu shown per row for secondary actions (note,
+// reschedule, edit dates) — only one open at a time, closes on any
+// click outside it. `openMenuFor` holds a unique string key per row
+// (e.g. 'task-42', 'activity-7') so each row's menu is independent.
+const openMenuFor = ref(null)
+function toggleMenu(key) {
+  openMenuFor.value = openMenuFor.value === key ? null : key
+}
+function closeMenu() {
+  openMenuFor.value = null
+}
+onMounted(() => document.addEventListener('click', closeMenu))
+onUnmounted(() => document.removeEventListener('click', closeMenu))
 
 // Shift modal replaces the old "record delay" modal — it wraps the
 // real backend flow (shift_preview then shift), matching what
@@ -98,10 +111,10 @@ function isOverdue(task) {
 // disagreed with what was actually in the database.
 const ALLOWED_TRANSITIONS = {
   pending: ['in_progress', 'skipped'],
-  in_progress: ['completed', 'skipped'],
+  in_progress: ['completed', 'skipped', 'pending'],
   overdue: ['in_progress', 'completed', 'skipped'],
-  completed: [],
-  skipped: [],
+  completed: ['pending'],
+  skipped: ['pending'],
 }
 
 function availableStatusOptions(task) {
@@ -133,9 +146,6 @@ const skippedTasks = computed(() => tasks.value.filter(t => t.status === 'skippe
 
 const progress = computed(() => {
   if (tasks.value.length === 0) return 0
-  // A cycle is considered done once every mandatory task is completed
-  // OR skipped (per the backend's auto-completion rule), so both
-  // count toward progress here.
   return Math.round(((completedTasks.value.length + skippedTasks.value.length) / tasks.value.length) * 100)
 })
 
@@ -728,20 +738,47 @@ onMounted(loadCycle)
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
                   <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-                    <BaseSelect
-                      v-if="task.status !== 'completed' && task.status !== 'skipped'"
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button v-else class="action-btn action-undo" @click.stop="updateTaskStatus(task.cycle_task_id, 'pending')">Undo</button>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('tasktag-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'tasktag-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="status-actions">
+                      <button
+                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
+                        :key="opt.value"
+                        class="status-pill"
+                        :class="statusClass(opt.value)"
+                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                      >{{ opt.label }}</button>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div class="col-side">
+            <div class="side-card">
+              <div class="side-card-title">Status summary</div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-pending);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ inProgressTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-skipped);"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
+            </div>
+            <div class="side-card">
+              <div class="side-card-title">Cycle info</div>
+              <div class="info-row"><span class="info-label">Status</span><span class="info-value">{{ cycle.status }}</span></div>
+              <div class="info-row"><span class="info-label">Start date</span><span class="info-value">{{ formatDate(cycle.start_date) }}</span></div>
+              <div class="info-row"><span class="info-label">End date</span><span class="info-value">{{ formatDate(endDate) }}</span></div>
+              <div class="info-row"><span class="info-label">Progress</span><span class="info-value">{{ progress }}%</span></div>
             </div>
           </div>
         </div>
@@ -758,17 +795,24 @@ onMounted(loadCycle)
                     {{ act.activity_name }}
                     <span class="act-task-count">{{ tasksForActivity(act).length }} task{{ tasksForActivity(act).length !== 1 ? 's' : '' }}</span>
                   </div>
-                  <span class="tc-status status-activity">Activity</span>
+                  <div class="tc-right-top">
+                    <span class="tc-status status-activity">Activity</span>
+                    <div v-if="cycle.status === 'running'" class="row-menu" @click.stop>
+                      <button type="button" class="row-menu-trigger" @click="toggleMenu('activity-' + act.cycle_activity_id)">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                      </button>
+                      <div v-if="openMenuFor === 'activity-' + act.cycle_activity_id" class="row-menu-dropdown">
+                        <button type="button" class="row-menu-item" @click="openActivityEdit(act); openMenuFor = null">Edit dates</button>
+                        <button type="button" class="row-menu-item" @click="openNoteModal('activity', act); openMenuFor = null">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="act-dates">{{ formatDate(act.calculated_start_date) }} → {{ formatDate(act.calculated_end_date) }}</div>
 
                 <template v-if="expandedActivityIds.has(act.cycle_activity_id)">
                   <div v-if="act.note_text" class="act-note">{{ act.note_text }}</div>
                   <div v-if="tagsForActivity(act).length > 0" class="tc-tag-row"><span v-for="tag in tagsForActivity(act)" :key="tag.tag_id" class="tc-tag-chip tc-tag-chip-violet">{{ tag.tag_name }}</span></div>
-                  <div v-if="cycle.status === 'running'" class="act-actions">
-                    <button class="action-btn action-undo" @click.stop="openActivityEdit(act)">Edit dates</button>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('activity', act)">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
-                  </div>
 
                   <div v-if="tasksForActivity(act).length > 0" class="act-task-list">
                     <div v-for="task in tasksForActivity(act)" :key="task.cycle_task_id" class="act-task-row" @click.stop="openTaskDetail(task)">
@@ -793,22 +837,32 @@ onMounted(loadCycle)
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                     <div v-if="task.note_text" class="tc-note">{{ task.note_text }}</div>
                   </div>
-<div class="tc-right" @click.stop>
-                    <span class="tc-status status-overdue">Overdue</span>
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button class="action-btn action-delay" @click.stop="openShiftModal(task)">Reschedule</button>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                  <div class="tc-right" @click.stop>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('overdue-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'overdue-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="status-actions">
+                      <button
+                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
+                        :key="opt.value"
+                        class="status-pill"
+                        :class="statusClass(opt.value)"
+                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                      >{{ opt.label }}</button>
+                      <button class="status-pill pill-delay" @click.stop="openShiftModal(task)">Reschedule</button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-
             <div v-if="pendingTasks.length > 0">
               <div class="timeline-label">Pending</div>
               <div v-for="task in pendingTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
@@ -820,21 +874,31 @@ onMounted(loadCycle)
                     <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
-		  <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                  <div class="tc-right" @click.stop>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('pending-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'pending-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="status-actions">
+                      <button
+                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
+                        :key="opt.value"
+                        class="status-pill"
+                        :class="statusClass(opt.value)"
+                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                      >{{ opt.label }}</button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-
             <div v-if="inProgressTasks.length > 0">
               <div class="timeline-label">In Progress</div>
               <div v-for="task in inProgressTasks" :key="task.cycle_task_id" class="task-card" @click="openTaskDetail(task)">
@@ -846,21 +910,31 @@ onMounted(loadCycle)
                     <div v-if="activityForTask(task)" class="tc-activity-badge">Part of: {{ activityForTask(task).activity_name }}</div>
                     <div v-if="tagsForTask(task).length > 0" class="tc-tag-row"><span v-for="tag in tagsForTask(task)" :key="tag.tag_id" class="tc-tag-chip">{{ tag.tag_name }}</span></div>
                   </div>
-		  <div class="tc-right" @click.stop>
-                    <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
-                    <BaseSelect
-                      class="status-select"
-                      :model-value="task.status"
-                      @update:model-value="(v) => updateTaskStatus(task.cycle_task_id, v)"
-                    >
-                      <option v-for="opt in availableStatusOptions(task)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                    </BaseSelect>
-                    <button class="action-btn action-undo" @click.stop="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                  <div class="tc-right" @click.stop>
+                    <div class="tc-right-top">
+                      <span class="tc-status" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+                      <div class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('inprogress-' + task.cycle_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'inprogress-' + task.cycle_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="status-actions">
+                      <button
+                        v-for="opt in availableStatusOptions(task).filter(o => o.value !== task.status)"
+                        :key="opt.value"
+                        class="status-pill"
+                        :class="statusClass(opt.value)"
+                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                      >{{ opt.label }}</button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-
             <div v-if="completedTasks.length > 0">
               <div class="timeline-label">Completed</div>
               <div v-for="task in completedTasks" :key="task.cycle_task_id" class="task-card completed-card" @click="openTaskDetail(task)">
@@ -899,11 +973,11 @@ onMounted(loadCycle)
           <div class="col-side">
             <div class="side-card">
               <div class="side-card-title">Status summary</div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-pending);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--warning);"></div><span class="legend-label">In progress</span><span class="legend-count">{{ inProgressTasks.length }}</span></div>
               <div class="legend-item"><div class="legend-dot" style="background:var(--danger);"></div><span class="legend-label">Overdue</span><span class="legend-count">{{ overdueTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:#F59E0B;"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
-              <div class="legend-item"><div class="legend-dot" style="background:var(--border);"></div><span class="legend-label">Pending</span><span class="legend-count">{{ pendingTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--success);"></div><span class="legend-label">Completed</span><span class="legend-count">{{ completedTasks.length }}</span></div>
+              <div class="legend-item"><div class="legend-dot" style="background:var(--status-skipped);"></div><span class="legend-label">Skipped</span><span class="legend-count">{{ skippedTasks.length }}</span></div>
             </div>
             <div class="side-card">
               <div class="side-card-title">Cycle info</div>
@@ -1089,8 +1163,6 @@ onMounted(loadCycle)
           <p class="task-detail-block-text">{{ taskDetailModal.task.note_text }}</p>
         </div>
 
-        <!-- From the original template — loaded separately since a
-             running task doesn't carry its own copy of the description. -->
         <div v-if="taskDetailModal.loading" class="task-detail-loading">Loading template details...</div>
         <div v-else-if="taskDetailModal.templateDetail?.description" class="task-detail-block">
           <div class="task-detail-block-label">Description (from template)</div>
@@ -1107,19 +1179,16 @@ onMounted(loadCycle)
 </template>
 
 <style scoped>
-/* ── BREADCRUMB ── */
 .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: var(--font-label); }
 .breadcrumb-link { color: var(--text-muted); cursor: pointer; }
 .breadcrumb-link:hover { color: var(--violet); }
 .breadcrumb-sep { color: var(--text-muted); }
 .breadcrumb-current { color: var(--text-primary); font-weight: 500; }
 
-/* ── PAGE ── */
 .detail-page { display: flex; flex-direction: column; gap: 20px; }
 .loading-msg { font-size: var(--font-body); color: var(--text-muted); padding: 40px 0; }
 .error-banner { background: var(--danger-bg); border: 1px solid #FECACA; border-radius: var(--radius-md); padding: 12px 16px; font-size: var(--font-body); color: #B91C1C; }
 
-/* ── CYCLE HEADER ── */
 .cycle-header { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 18px 22px; }
 .cycle-header-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; gap: 16px; }
 .cycle-title { font-size: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; margin-bottom: 3px; }
@@ -1139,11 +1208,11 @@ onMounted(loadCycle)
 .meta-value { font-size: var(--font-label); font-weight: 600; color: var(--text-primary); }
 .meta-value.danger { color: var(--danger); }
 
-/* ── ALERT ── */
 .alert-box { background: var(--danger-bg); border: 1px solid #FECACA; border-radius: var(--radius-md); padding: 12px 16px; display: flex; gap: 10px; align-items: flex-start; }
 .alert-box svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
 .alert-title { font-size: var(--font-body); font-weight: 600; color: #B91C1C; margin-bottom: 2px; }
 .alert-desc { font-size: var(--font-label); color: #991B1B; }
+
 
 /* ── VIEW TOGGLE ── */
 .view-toggle-bar { display: flex; align-items: center; }
@@ -1164,12 +1233,10 @@ onMounted(loadCycle)
 .col-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .col-side { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; position: sticky; top: 80px; }
 
-/* ── TIMELINE LABELS ── */
 .timeline-label { font-size: var(--font-upper); font-weight: 600; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.07em; padding: 8px 0 6px; }
 .timeline-label.danger { color: var(--danger); }
 .timeline-label.violet { color: var(--violet); }
 
-/* ── TASK CARDS ── */
 .task-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; cursor: pointer; transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }
 .task-card:hover { border-color: #C4B5FD; box-shadow: var(--shadow-sm); }
 .task-card.overdue-card { border-color: #FECACA; background: #FFF8F8; }
@@ -1187,22 +1254,18 @@ onMounted(loadCycle)
 .tc-tag-chip { font-size: var(--font-hint); font-weight: 500; background: var(--bg-page); color: var(--text-secondary); padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border-light); }
 .tc-tag-chip-violet { background: var(--violet-mid); color: var(--violet-dark); border-color: #DDD6FE; }
 .tc-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+.tc-right-top { display: flex; align-items: center; gap: 8px; }
 .tc-mandatory { font-size: var(--font-hint); font-weight: 700; color: var(--danger); }
 .tc-fixed { font-size: var(--font-hint); font-weight: 700; color: #92400E; }
 
-/* ── STATUS BADGES ── */
-.tc-status { font-size: var(--font-badge); font-weight: 500; padding: 3px 9px; border-radius: 4px; }
-.status-completed { background: var(--success-bg); color: #15803D; }
-.status-in-progress { background: var(--warning-bg); color: #92400E; }
-.status-overdue { background: var(--danger-bg); color: #B91C1C; }
-.status-skipped { background: #FEF3C7; color: #92400E; }
-.status-pending { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
-.status-activity { background: var(--violet-bg); color: var(--violet); }
+.tc-status { font-size: var(--font-hint); font-weight: 600; padding: 4px 11px; border-radius: 12px; }
+.status-completed { background: var(--status-completed-badge-bg); color: var(--status-completed-badge-text); }
+.status-in-progress { background: var(--status-in-progress-badge-bg); color: var(--status-in-progress-badge-text); }
+.status-overdue { background: var(--status-overdue-badge-bg); color: var(--status-overdue-badge-text); }
+.status-skipped { background: var(--status-skipped-badge-bg); color: var(--status-skipped-badge-text); }
+.status-pending { background: var(--status-pending-badge-bg); color: var(--status-pending-badge-text); }
+.status-activity { background: var(--status-activity-badge-bg); color: var(--status-activity-badge-text); }
 
-/* ── ACTIONS ──
-   Buttons that change state get a visible border, a subtle lift and
-   shadow on hover, and a brightness shift — clear, consistent
-   feedback that these are interactive, not just colored labels. */
 .tc-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .action-btn {
   font-size: var(--font-label);
@@ -1217,12 +1280,75 @@ onMounted(loadCycle)
 .action-btn:active { transform: translateY(0); box-shadow: none; }
 .action-complete { background: var(--success-bg); color: #15803D; border: 1px solid #BBF7D0; }
 .action-delay { background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
-.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
-/* Compact sizing for the inline status dropdown on task rows */
-.status-select :deep(.base-select) { height: 34px; padding: 0 26px 0 10px; background: var(--white); }
-.status-select :deep(.select-chevron) { right: 8px; width: 13px; height: 13px; }
 
-/* ── TASK DETAIL MODAL ── */
+/* ── STATUS ACTIONS ── */
+.status-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* ── ROW OVERFLOW MENU ──
+   Secondary per-row actions (note, edit dates) collapse behind a
+   "⋯" trigger instead of sitting as always-visible buttons — keeps
+   the primary status-pill actions from getting crowded out. */
+.row-menu { position: relative; }
+.row-menu-trigger {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.row-menu-trigger svg { width: 16px; height: 16px; }
+.row-menu-trigger:hover { background: var(--bg-page); border-color: var(--border); }
+.row-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--white);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+}
+.row-menu-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font-size: var(--font-label);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+  white-space: nowrap;
+}
+.row-menu-item:hover { background: var(--bg-page); }
+.status-pill {
+  font-size: var(--font-hint);
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-family: var(--font-main);
+  border: 1px solid var(--border-light);
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.status-pill:hover { background: var(--white); border-color: var(--border); color: var(--text-primary); }
+.status-pill:active { background: var(--bg-page); }
+
+.status-pill.pill-delay:hover { background: #FFE7D8; border-color: #F97316; color: #C2410C; }
+.action-undo { background: var(--bg-page); color: var(--text-secondary); border: 1px solid var(--border-light); }
+
 .task-detail { display: flex; flex-direction: column; gap: 10px; }
 .task-detail-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-light); }
 .task-detail-row:last-of-type { border-bottom: none; }
@@ -1233,7 +1359,6 @@ onMounted(loadCycle)
 .task-detail-block-text { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.55; margin: 0; }
 .task-detail-loading { font-size: var(--font-label); color: var(--text-muted); padding-top: 8px; }
 
-/* ── ACTIVITY CARD ── */
 .activity-card { background: var(--violet-bg); border: 1px solid #DDD6FE; border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 6px; }
 .act-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .act-row-clickable { cursor: pointer; }
@@ -1250,6 +1375,7 @@ onMounted(loadCycle)
 .act-task-name { font-size: var(--font-label); color: var(--text-primary); font-weight: 500; }
 .act-task-empty { margin-top: 10px; padding-top: 10px; border-top: 1px solid #DDD6FE; font-size: var(--font-label); color: var(--violet-dark); opacity: 0.7; }
 .empty-section { font-size: var(--font-body); color: var(--text-muted); padding: 24px 0; text-align: center; }
+
 
 /* ── SHIFT / NOTE / ACTIVITY-EDIT / PREREQ MODALS ── */
 .shift-modal-body { display: flex; flex-direction: column; gap: 14px; }

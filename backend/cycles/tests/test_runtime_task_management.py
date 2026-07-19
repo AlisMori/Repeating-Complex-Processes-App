@@ -91,26 +91,42 @@ class RuntimeTaskManagementTests(APITestCase):
         response = self.client.patch(url, {"status": "skipped"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    def test_completed_is_terminal(self):
-        # A second pending mandatory task keeps the cycle running, so this
-        # isolates the terminal-status check from cycle auto-completion
-        # (that's covered separately below).
-        CycleTask.objects.create(
-            cycle=self.cycle, template_task=self.task_b, task_name="Keeps cycle running",
-            calculated_start_date=date(2026, 7, 1), calculated_end_date=date(2026, 7, 2),
-            is_mandatory=True
-        )
+    def test_completed_can_only_transition_to_pending(self):
+            # A second pending mandatory task keeps the cycle running, so this
+            # isolates the terminal-status check from cycle auto-completion
+            # (that's covered separately below).
+            #
+            # completed used to be fully terminal (no transitions out of it
+            # at all). It's since been deliberately relaxed to support
+            # undoing an accidental completion: completed -> pending is
+            # now allowed, but completed -> in_progress and
+            # completed -> skipped remain blocked, since those aren't
+            # "undo", they're skipping straight past pending to a
+            # different state entirely.
+            CycleTask.objects.create(
+                cycle=self.cycle, template_task=self.task_b, task_name="Keeps cycle running",
+                calculated_start_date=date(2026, 7, 1), calculated_end_date=date(2026, 7, 2),
+                is_mandatory=True
+            )
 
-        self.cycle_task_a.status = "in_progress"
-        self.cycle_task_a.save(update_fields=["status"])
-        url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
-        self.client.patch(url, {"status": "completed"})
+            self.cycle_task_a.status = "in_progress"
+            self.cycle_task_a.save(update_fields=["status"])
+            url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
+            self.client.patch(url, {"status": "completed"})
 
-        self.cycle.refresh_from_db()
-        self.assertEqual(self.cycle.status, "running")
+            self.cycle.refresh_from_db()
+            self.assertEqual(self.cycle.status, "running")
 
-        response = self.client.patch(url, {"status": "pending"})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            blocked_response = self.client.patch(url, {"status": "in_progress"})
+            self.assertEqual(blocked_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+            also_blocked_response = self.client.patch(url, {"status": "skipped"})
+            self.assertEqual(also_blocked_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+            undo_response = self.client.patch(url, {"status": "pending"})
+            self.assertEqual(undo_response.status_code, status.HTTP_200_OK)
+            self.cycle_task_a.refresh_from_db()
+            self.assertEqual(self.cycle_task_a.status, "pending")
 
     def test_setting_overdue_directly_is_rejected(self):
         url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])

@@ -24,6 +24,10 @@ export function requestPasswordReset(payload) {
   return api.post('/auth/password-reset/', payload)
 }
 
+export function validatePasswordResetLink(uid, token) {
+  return api.get(`/auth/password-reset/confirm/${encodeURIComponent(uid)}/${encodeURIComponent(token)}/`)
+}
+
 export function confirmPasswordReset(payload) {
   return api.post('/auth/password-reset/confirm/', payload)
 }

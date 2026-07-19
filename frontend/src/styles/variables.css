@@ -35,6 +35,32 @@
   --info:        #3B82F6;
   --info-bg:     #EFF6FF;
 
+  /* Task/cycle status colors not covered by the generic semantic set
+     above — reused across every screen that shows a status legend or
+     dot (Cycle Detail, Dashboard's multi-cycle Gantt, etc.) so they
+     never drift out of sync with each other. */
+  --status-pending: #94A3B8;
+  --status-skipped: #64748B;
+
+  /* Pastel badge pairs — used for the status label/pill shown on
+     each task row (Cycle Detail), as opposed to the solid single-
+     color dots above (used in legends, like Dashboard's Gantt key).
+     Same 5 statuses, deliberately named to pair with the dot
+     variables above them so it's obvious which dot a given badge
+     corresponds to. */
+  --status-pending-badge-bg: #F1F5F9;
+  --status-pending-badge-text: #475569;
+  --status-in-progress-badge-bg: var(--warning-bg);
+  --status-in-progress-badge-text: #92400E;
+  --status-overdue-badge-bg: var(--danger-bg);
+  --status-overdue-badge-text: #B91C1C;
+  --status-completed-badge-bg: #DCFCE7;
+  --status-completed-badge-text: #166534;
+  --status-skipped-badge-bg: #475569;
+  --status-skipped-badge-text: var(--white);
+  --status-activity-badge-bg: var(--violet-bg);
+  --status-activity-badge-text: var(--violet);
+
   /* ── TYPOGRAPHY SCALE ──
      Use these variables everywhere instead of hardcoded px values.
      Changing one value here updates the whole app instantly.

@@ -47,7 +47,7 @@ const props = defineProps({
   // dependsOnIndex: index of the prerequisite bar within THIS SAME
   // taskBars array (after sorting), or null/undefined for none.
   taskBars: { type: Array, default: () => [] },
-  // [{ name, start, end }]
+  // [{ id, name, start, end }]
   activityBars: { type: Array, default: () => [] },
   maxDay: { type: Number, required: true },
   // Pixels of horizontal space per day. 20px keeps short (5-10
@@ -56,15 +56,58 @@ const props = defineProps({
   pxPerDay: { type: Number, default: 20 },
 })
 
-const ROW_HEIGHT = 24  // tick row, section row
+const ROW_HEIGHT = 24  // tick row
 const ACTIVITY_ROW_HEIGHT = 36
-const TASK_ROW_HEIGHT = 46 // extra room for an optional dependency line
+const TASK_ROW_HEIGHT = 36
 const BAR_CENTER_Y = 18 // vertical center of a bar within its row (top:3px, height:30px)
+
+// One flat, ordered list of rows: each activity immediately
+// followed by the tasks linked to it (grouped by dependency, not by
+// type), then any tasks with no linked activity at the end. No
+// separate "Activities"/"Tasks" section headers — the grouping
+// itself, plus a slight indent on linked tasks, is what conveys the
+// structure.
+const rows = computed(() => {
+  const result = []
+  const linkedTaskIndices = new Set()
+
+  props.activityBars.forEach((act, actIdx) => {
+    result.push({ type: 'activity', bar: act, key: 'a-' + actIdx })
+    props.taskBars.forEach((task, taskIdx) => {
+      if (act.id !== undefined && task.activityId === act.id) {
+        result.push({ type: 'task', bar: task, key: 't-' + taskIdx, linked: true })
+        linkedTaskIndices.add(taskIdx)
+      }
+    })
+  })
+
+  props.taskBars.forEach((task, taskIdx) => {
+    if (!linkedTaskIndices.has(taskIdx)) {
+      result.push({ type: 'task', bar: task, key: 't-' + taskIdx, linked: false })
+    }
+  })
+
+  return result
+})
 
 const safeMaxDay = computed(() => Math.max(props.maxDay, 1))
 const totalWidth = computed(() => safeMaxDay.value * props.pxPerDay)
 
-const hoveredBar = ref(null)
+// Which bar (if any) is currently hovered, so we can spotlight its
+// day range across the full chart height — makes it obvious exactly
+// which days a bar spans relative to the tick marks above, even for
+// bars far down the task list.
+// Tracked by row key (a stable string), not object reference —
+// comparing hoveredBar to row.bar by === was unreliable (verified:
+// the correct bar was being set on hover, but the equality check
+// still failed on the very next render), most likely a Vue
+// reactivity/proxy-identity subtlety with props-derived objects.
+// Key comparison sidesteps that class of bug entirely.
+const hoveredRowKey = ref(null)
+const hoveredBar = computed(() => {
+  const row = rows.value.find((r) => r.key === hoveredRowKey.value)
+  return row ? row.bar : null
+})
 
 function highlightStyle(bar) {
   const left = bar.start * props.pxPerDay
@@ -99,6 +142,10 @@ function positionBar(bar) {
   return { left: `${left}px`, width: `${width}px` }
 }
 
+// The tooltip's own width depends on its text ("5 days" vs "12
+// days"), which rarely matches the bar's width exactly — especially
+// for short bars. Center it on the bar's midpoint instead of trying
+// to match the bar's box, so it's never visibly off-center.
 function tooltipStyle(bar) {
   const left = bar.start * props.pxPerDay
   const width = Math.max((bar.end - bar.start) * props.pxPerDay, 14)
@@ -112,21 +159,17 @@ const chartStyle = computed(() => ({
 }))
 
 // ── DEPENDENCY ARROW GEOMETRY ──────────────────────────────
-const taskSectionTop = computed(() => {
-  let top = ROW_HEIGHT
-  if (props.activityBars.length > 0) {
-    top += ROW_HEIGHT + props.activityBars.length * ACTIVITY_ROW_HEIGHT
-  }
-  if (props.taskBars.length > 0) {
-    top += ROW_HEIGHT
-  }
-  return top
-})
+// Rows are no longer two separate blocks (activities, then tasks) —
+// the grouping redesign interleaves each activity with its linked
+// tasks. So a bar's vertical position is wherever it actually landed
+// in `rows`, not some fixed offset assuming a rigid two-block layout.
+// (This only works cleanly because ACTIVITY_ROW_HEIGHT and
+// TASK_ROW_HEIGHT are equal — every row is the same height.)
+const chartHeight = computed(() => ROW_HEIGHT + rows.value.length * TASK_ROW_HEIGHT)
 
-const chartHeight = computed(() => taskSectionTop.value + props.taskBars.length * TASK_ROW_HEIGHT)
-
-function barCenterY(index) {
-  return taskSectionTop.value + index * TASK_ROW_HEIGHT + BAR_CENTER_Y
+function barCenterY(bar) {
+  const rowIndex = rows.value.findIndex((r) => r.bar === bar)
+  return ROW_HEIGHT + rowIndex * TASK_ROW_HEIGHT + BAR_CENTER_Y
 }
 
 function barRight(bar) {
@@ -151,14 +194,14 @@ const dependencyArrows = computed(() => {
     if (!depBar) return
 
     const fromX = barRight(depBar)
-    const fromY = barCenterY(depIndex)
+    const fromY = barCenterY(depBar)
     const toX = barLeft(bar)
-    const toY = barCenterY(i)
+    const toY = barCenterY(bar)
 
     let path
     if (fromY === toY) {
       path = `M ${fromX} ${fromY} L ${Math.max(toX - 6, fromX)} ${toY}`
-    } else if (toX > fromX) {
+    } else if (toX >= fromX) {
       // Clamp the elbow so it always sits strictly between fromX and
       // toX, even when the gap is very small (dependent tasks are
       // often scheduled right up against each other).
@@ -200,81 +243,65 @@ const dependencyArrows = computed(() => {
       <div class="gantt-sidebar">
         <div class="gantt-side-cell gantt-axis-label" :style="{ height: ROW_HEIGHT + 'px' }">Day</div>
 
-        <div v-if="activityBars.length > 0" class="gantt-side-cell gantt-section-label" :style="{ height: ROW_HEIGHT + 'px' }">Activities</div>
         <div
-          v-for="bar in activityBars"
-          :key="'a-side-' + bar.name"
+          v-for="row in rows"
+          :key="'side-' + row.key"
           class="gantt-side-cell gantt-side-label"
-          :style="{ height: ACTIVITY_ROW_HEIGHT + 'px' }"
-          :title="bar.name"
-        >{{ bar.name }}</div>
-
-        <div v-if="taskBars.length > 0" class="gantt-side-cell gantt-section-label" :style="{ height: ROW_HEIGHT + 'px' }">Tasks</div>
-        <div
-          v-for="bar in taskBars"
-          :key="'t-side-' + bar.name"
-          class="gantt-side-cell gantt-side-label"
-          :style="{ height: TASK_ROW_HEIGHT + 'px' }"
-          :title="bar.name"
-        >{{ bar.name }}</div>
+          :class="{ 'gantt-side-label-linked': row.type === 'task' && row.linked }"
+          :style="{ height: (row.type === 'activity' ? ACTIVITY_ROW_HEIGHT : TASK_ROW_HEIGHT) + 'px' }"
+          :title="row.bar.name"
+        >{{ row.bar.name }}</div>
       </div>
 
       <!-- CONTENT: ticks + bars, top to bottom, same row heights as the sidebar -->
       <div class="gantt-content gantt-grid">
-	<!-- HOVER SPOTLIGHT: full-height band across the hovered bar's day range -->
-	<div
+
+        <!-- HOVER SPOTLIGHT: full-height band across the hovered bar's day range -->
+        <div
           v-if="hoveredBar"
-  	  class="gantt-hover-highlight"
-  	  :style="highlightStyle(hoveredBar)"
-	></div>
+          class="gantt-hover-highlight"
+          :style="highlightStyle(hoveredBar)"
+        ></div>
+
         <div class="gantt-tick-row" :style="{ height: ROW_HEIGHT + 'px' }">
           <div v-for="tick in ticks" :key="tick" class="gantt-tick" :style="{ left: (tick * pxPerDay) + 'px' }">
             <span>{{ tick }}</span>
           </div>
         </div>
 
-        <div v-if="activityBars.length > 0" class="gantt-content-cell" :style="{ height: ROW_HEIGHT + 'px' }"></div>
         <div
-          v-for="bar in activityBars"
-          :key="'a-content-' + bar.name"
+          v-for="row in rows"
+          :key="'content-' + row.key"
           class="gantt-content-cell"
-          :style="{ height: ACTIVITY_ROW_HEIGHT + 'px' }"
+          :style="{ height: (row.type === 'activity' ? ACTIVITY_ROW_HEIGHT : TASK_ROW_HEIGHT) + 'px' }"
         >
-        <div
-            class="gantt-bar gantt-bar-activity"
-            :style="positionBar(bar)"
-            @mouseenter="hoveredBar = bar"
-            @mouseleave="hoveredBar = null"
-          ></div>
-          <div v-if="hoveredBar === bar" class="gantt-bar-tooltip" :style="tooltipStyle(bar)">
-            {{ bar.end - bar.start }} day{{ (bar.end - bar.start) !== 1 ? 's' : '' }}
-          </div>
-        </div>
-
-        <div v-if="taskBars.length > 0" class="gantt-content-cell" :style="{ height: ROW_HEIGHT + 'px' }"></div>
-        <div
-          v-for="bar in taskBars"
-          :key="'t-content-' + bar.name"
-          class="gantt-content-cell"
-          :style="{ height: TASK_ROW_HEIGHT + 'px' }"
-        >
-          <div
-            class="gantt-bar"
-            :class="{
-              'gantt-bar-mandatory': bar.isMandatory,
-              'gantt-bar-fixed': bar.isFixed,
-              'gantt-bar-task': !bar.isMandatory && !bar.isFixed
-            }"
-            :style="positionBar(bar)"
-            @mouseenter="hoveredBar = bar"
-            @mouseleave="hoveredBar = null"
-          ></div>
-          <div v-if="bar.depName" class="gantt-dep-row" :style="{ left: (bar.start * pxPerDay) + 'px' }">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2 6h8M7 3l3 3-3 3"/>
-            </svg>
-            after {{ bar.depName }}
-          </div>
+          <template v-if="row.type === 'activity'">
+            <div
+              class="gantt-bar gantt-bar-activity"
+              :style="positionBar(row.bar)"
+              @mouseenter="hoveredRowKey = row.key"
+              @mouseleave="hoveredRowKey = null"
+            ></div>
+            <div v-if="hoveredRowKey === row.key" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
+              {{ row.bar.end - row.bar.start }} day{{ (row.bar.end - row.bar.start) !== 1 ? 's' : '' }}
+            </div>
+          </template>
+          <template v-else>
+            <div
+              class="gantt-bar"
+              :class="{
+                'gantt-bar-mandatory': row.bar.isMandatory,
+                'gantt-bar-fixed': row.bar.isFixed,
+                'gantt-bar-task': !row.bar.isMandatory && !row.bar.isFixed
+              }"
+              :style="positionBar(row.bar)"
+              @mouseenter="hoveredRowKey = row.key"
+              @mouseleave="hoveredRowKey = null"
+            ></div>
+            <div v-if="hoveredRowKey === row.key" class="gantt-bar-tooltip" :style="tooltipStyle(row.bar)">
+              {{ row.bar.end - row.bar.start }} day{{ (row.bar.end - row.bar.start) !== 1 ? 's' : '' }}
+            </div>
+          </template>
         </div>
 
         <!-- DEPENDENCY ARROWS: one continuous SVG overlay across the
@@ -330,14 +357,14 @@ const dependencyArrows = computed(() => {
 .gantt-scroll-row {
   display: flex;
   align-items: flex-start;
-  padding: 14px 18px;
+  padding: 14px 18px 28px 18px;
   overflow-x: auto;
 }
 
 .gantt-sidebar {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: 10;
   flex-shrink: 0;
   width: 130px;
   background: var(--white);
@@ -365,14 +392,11 @@ const dependencyArrows = computed(() => {
   letter-spacing: 0.07em;
 }
 
-.gantt-section-label {
-  font-size: var(--font-hint);
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  justify-content: flex-start;
-  padding-left: 2px;
+/* Tasks nested under an activity get a slight indent — this, plus
+   ordering, is what conveys the grouping now that there are no
+   separate "Activities"/"Tasks" section headers. */
+.gantt-side-label-linked {
+  padding-right: 22px;
 }
 
 .gantt-content {
@@ -393,6 +417,10 @@ const dependencyArrows = computed(() => {
   border-bottom: 1px solid rgba(15, 23, 42, 0.03);
 }
 
+/* Full-height spotlight band shown while hovering a bar, so it's
+   obvious exactly which days it spans relative to the tick marks
+   above — sits behind the bars themselves (z-index), never blocks
+   interaction with them. */
 .gantt-hover-highlight {
   position: absolute;
   top: 0;
@@ -404,6 +432,10 @@ const dependencyArrows = computed(() => {
   pointer-events: none;
 }
 
+/* Floating duration tooltip, anchored directly above the hovered
+   bar (same left/width as the bar itself, via positionBar) — a
+   styled replacement for the native browser title tooltip, showing
+   only the duration, never the task/activity name. */
 .gantt-bar-tooltip {
   position: absolute;
   bottom: calc(100% + 8px);
@@ -413,24 +445,35 @@ const dependencyArrows = computed(() => {
   justify-content: center;
   font-size: var(--font-hint);
   font-weight: 600;
-  color: var(--white);
-  background: #1E293B;
+  color: #1E293B;
+  background: var(--white);
+  border: 1px solid var(--border-light);
   border-radius: 5px;
   padding: 3px 9px;
   white-space: nowrap;
   pointer-events: none;
   z-index: 5;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
 }
 
-.gantt-bar-tooltip::after {
+.gantt-bar-tooltip::before {
   content: '';
   position: absolute;
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--border-light);
+}
+
+.gantt-bar-tooltip::after {
+  content: '';
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top-color: #1E293B;
+  border-top-color: var(--white);
 }
 
 .gantt-tick-row { position: relative; }
@@ -441,27 +484,15 @@ const dependencyArrows = computed(() => {
   position: absolute;
   top: 3px;
   height: 30px;
-  z-index: 2;
   border-radius: var(--radius-sm);
   box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  z-index: 2;
 }
 
 .gantt-bar-activity { background: linear-gradient(90deg, #7C3AED 0%, #A78BFA 100%); }
 .gantt-bar-task { background: #475569; }
 .gantt-bar-mandatory { background: #EF4444; }
 .gantt-bar-fixed { background: #F59E0B; }
-
-.gantt-dep-row {
-  position: absolute;
-  top: 37px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-hint);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.gantt-dep-row svg { width: 10px; height: 10px; }
 
 .gantt-dep-arrows {
   position: absolute;

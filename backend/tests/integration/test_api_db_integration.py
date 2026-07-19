@@ -2,7 +2,10 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from django.urls import reverse
+
 from templates_mgmt.models import Template, TemplateTask, TemplateActivity
+from cycles.models import CycleInstance, CycleTask, CycleActivity
 
 
 User = get_user_model()
@@ -91,3 +94,102 @@ class ApiDatabaseIntegrationTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["template_name"], "Readable Template")
+
+    def test_cycle_creation_generates_runtime_records(self):
+        template = Template.objects.create(
+            user=self.user,
+            template_name="Runtime Template",
+        )
+
+        activity = TemplateActivity.objects.create(
+            template=template,
+            activity_name="Orientation",
+            start_offset_days=0,
+            end_offset_days=5,
+        )
+
+        task = TemplateTask.objects.create(
+            template=template,
+            task_name="Sign contract",
+            day_offset=0,
+            duration_days=2,
+            template_activity=activity,
+        )
+
+        response = self.client.post(
+            reverse("cycles-list"),
+            {
+                "template": template.template_id,
+                "cycle_name": "June Cohort",
+                "start_date": "2026-07-01",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        cycle = CycleInstance.objects.get(cycle_name="June Cohort")
+
+        self.assertEqual(
+            CycleTask.objects.filter(cycle=cycle).count(),
+            1,
+        )
+
+        self.assertEqual(
+            CycleActivity.objects.filter(cycle=cycle).count(),
+            1,
+        )
+
+    def test_shift_api_persists_cascade_update(self):
+        template = Template.objects.create(
+            user=self.user,
+            template_name="Shift Template",
+        )
+
+        task_a = TemplateTask.objects.create(
+            template=template,
+            task_name="A",
+            day_offset=0,
+            duration_days=2,
+        )
+
+        response = self.client.post(
+            reverse("cycles-list"),
+            {
+                "template": template.template_id,
+                "cycle_name": "Shift Cycle",
+                "start_date": "2026-07-01",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        cycle = CycleInstance.objects.get(cycle_name="Shift Cycle")
+        runtime_task = CycleTask.objects.get(
+            cycle=cycle,
+            task_name="A",
+        )
+
+        original_date = runtime_task.calculated_start_date
+
+        response = self.client.post(
+            reverse(
+                "cycle-tasks-shift",
+                args=[runtime_task.cycle_task_id],
+            ),
+            {
+                "delay_days": 2,
+                "scope": "single",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        runtime_task.refresh_from_db()
+
+        self.assertNotEqual(
+            runtime_task.calculated_start_date,
+            original_date,
+        )

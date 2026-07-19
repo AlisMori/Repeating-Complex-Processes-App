@@ -7,10 +7,12 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { useToastStore } from '@/stores/toast'
+import { useOnboardingStore } from '@/stores/onboarding'
 import { getTags, createTag, editTag, deleteTag } from '@/api/templates'
 import { getErrorMessage } from '@/utils/apiErrors'
 
 const toast = useToastStore()
+const onboardingStore = useOnboardingStore()
 
 const tags = ref([])
 const loading = ref(true)
@@ -100,13 +102,21 @@ async function confirmDelete() {
   }
 }
 
-onMounted(loadTags)
+onMounted(async () => {
+  await loadTags()
+  onboardingStore.maybeAutoStart('tags')
+})
 </script>
 
 <template>
   <AppLayout>
     <template #topbar>
       <span class="topbar-title">Tags</span>
+      <button type="button" class="page-help-btn" title="Show tips for this page" style="margin-left: auto;" @click="onboardingStore.startTour('tags')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </button>
     </template>
 
     <div class="tags-page">
@@ -117,7 +127,7 @@ onMounted(loadTags)
       </p>
 
       <!-- CREATE -->
-      <div class="create-card">
+      <div class="create-card" data-tour="tags-create">
         <BaseInput
           v-model="newTagName"
           placeholder="New tag name, e.g. Important"
@@ -139,7 +149,7 @@ onMounted(loadTags)
       </div>
 
       <!-- LIST -->
-      <div v-else class="tag-list">
+      <div v-else class="tag-list" data-tour="tags-list">
         <div v-for="tag in tags" :key="tag.tag_id" class="tag-row">
           <div class="tag-row-left">
             <span class="tag-chip-lg">{{ tag.tag_name }}</span>
@@ -195,9 +205,11 @@ onMounted(loadTags)
 
 <style scoped>
 .topbar-title { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
+.page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
+.page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
-.tags-page { display: flex; flex-direction: column; gap: 18px; max-width: 720px; }
-.page-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; margin: 0; }
+.tags-page { display: flex; flex-direction: column; gap: 18px; }
+.page-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; margin: 0; max-width: 780px; }
 
 .create-card { display: flex; align-items: flex-end; gap: 10px; background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 16px 18px; }
 .create-card :deep(.base-input-group) { flex: 1; margin-bottom: 0; }

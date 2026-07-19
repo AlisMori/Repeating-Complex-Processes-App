@@ -1,7 +1,7 @@
 <!-- /frontend/src/views/TemplateDetailView.vue -->
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -10,6 +10,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import GanttChart from '@/components/GanttChart.vue'
 import { useToastStore } from '@/stores/toast'
+import { useOnboardingStore } from '@/stores/onboarding'
 import {
   getTemplate, getTemplateTasks, getTemplateActivities, getTemplateTimelinePreview,
   duplicateTemplate, deleteTemplate, downloadTemplate, updateTemplate,
@@ -21,12 +22,14 @@ import {
   getTaskTags, assignTagToTask, unassignTagFromTask,
   getActivityTags, assignTagToActivity, unassignTagFromActivity,
   getTemplateCategories, createTemplateCategory,
+  getTemplateVersions, makeCurrentVersion,
 } from '@/api/templates'
 import { getErrorMessage, isPermissionError } from '@/utils/apiErrors'
 
 const route = useRoute()
 const router = useRouter()
 const toast = useToastStore()
+const onboardingStore = useOnboardingStore()
 
 const template = ref(null)
 const tasks = ref([])
@@ -36,7 +39,32 @@ const timeline = ref(null)
 const loading = ref(true)
 const error = ref('')
 const deleteModalOpen = ref(false)
+
+// Overflow "⋯" menu shown per row for secondary actions (note,
+// delete) — only one open at a time, closes on any click outside it.
+const openMenuFor = ref(null)
+function toggleMenu(key) {
+  openMenuFor.value = openMenuFor.value === key ? null : key
+}
+function closeMenu() {
+  openMenuFor.value = null
+}
+onMounted(() => document.addEventListener('click', closeMenu))
+onUnmounted(() => document.removeEventListener('click', closeMenu))
+const taskTagLinks = ref([])
+const activityTagLinks = ref([])
+const allTags = ref([])
+const detailModal = ref({ open: false, type: null, item: null })
 const deleteLoading = ref(false)
+const versions = ref([])
+const viewMode = ref('list') // 'list' | 'gantt'
+// Forces the version <select> to remount after each pick — a native
+// select always visually locks onto whatever option the browser last
+// selected, regardless of what its bound v-model value is reset to
+// afterward (confirmed: resetting the bound value alone doesn't
+// re-sync the DOM). Remounting via :key is what actually works.
+const versionSelectKey = ref(0)
+const makeCurrentLoading = ref(false)
 
 // Tags
 const tags = ref([])
@@ -70,13 +98,15 @@ const newCategoryName = ref('')
 const noteModal = ref({ open: false, kind: null, item: null, text: '' })
 const noteLoading = ref(false)
 
-const templateId = ref(route.params.id)
+const templateId = computed(() => route.params.id)
+const isHistoricalVersion = computed(() => !!template.value && !template.value.is_current_version)
+
 
 async function loadTemplate() {
   loading.value = true
   error.value = ''
   try {
-    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes] = await Promise.all([
+    const [tplRes, tasksRes, activitiesRes, depsRes, timelineRes, tagsRes, taskTagsRes, activityTagsRes, categoriesRes, versionsRes] = await Promise.all([
       getTemplate(templateId.value),
       getTemplateTasks(templateId.value),
       getTemplateActivities(templateId.value),
@@ -85,11 +115,16 @@ async function loadTemplate() {
       getTags(),
       getTaskTags(),
       getActivityTags(),
-      getTemplateCategories(),
+      getTemplateCategories(templateId.value),
+      getTemplateVersions(templateId.value),
     ])
     template.value = tplRes.data
+    versions.value = Array.isArray(versionsRes.data) ? versionsRes.data : (versionsRes.data.results || [])
     tasks.value = Array.isArray(tasksRes.data) ? tasksRes.data : (tasksRes.data.results || [])
     activities.value = Array.isArray(activitiesRes.data) ? activitiesRes.data : (activitiesRes.data.results || [])
+    taskTagLinks.value = Array.isArray(taskTagsRes.data) ? taskTagsRes.data : (taskTagsRes.data.results || [])
+    activityTagLinks.value = Array.isArray(activityTagsRes.data) ? activityTagsRes.data : (activityTagsRes.data.results || [])
+    allTags.value = Array.isArray(tagsRes.data) ? tagsRes.data : (tagsRes.data.results || [])
     // Filter deps that belong to this template's tasks
     const taskIds = new Set(tasks.value.map(t => t.template_task_id))
     const allDeps = Array.isArray(depsRes.data) ? depsRes.data : (depsRes.data.results || [])
@@ -124,6 +159,36 @@ function formatReminders(val) {
     return val.map(d => d === 0 ? 'On the day' : `${d} days before`).join(', ')
   }
   return val === 0 ? 'On the day' : `${val} days before`
+}
+
+function tagNamesForTask(taskId) {
+  const tagIds = taskTagLinks.value.filter(l => l.template_task === taskId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+function tagNamesForActivity(activityId) {
+  const tagIds = activityTagLinks.value.filter(l => l.template_activity === activityId).map(l => l.tag)
+  return allTags.value.filter(t => tagIds.includes(t.tag_id)).map(t => t.tag_name)
+}
+
+
+function onSwitchVersion(newId) {
+  versionSelectKey.value++
+  if (String(newId) === String(templateId.value)) return
+  router.push({ name: 'template-detail', params: { id: newId } })
+}
+
+async function onMakeCurrent() {
+  makeCurrentLoading.value = true
+  try {
+    await makeCurrentVersion(templateId.value)
+    toast.success('This version is now current.')
+    await loadTemplate()
+  } catch {
+    toast.error('Failed to update the current version.')
+  } finally {
+    makeCurrentLoading.value = false
+  }
 }
 
 async function onDuplicate() {
@@ -417,6 +482,7 @@ const ganttData = computed(() => {
     isMandatory: b.is_mandatory,
     isFixed: b.is_fixed_date,
     depName: b.dep_name,
+    activityId: b.template_activity_id,
   }))
   // Resolve each bar's dependsOnIndex AFTER sorting — the index has
   // to point at the prerequisite's position in THIS final order, not
@@ -428,6 +494,7 @@ const ganttData = computed(() => {
   return {
     taskBars,
     activityBars: timeline.value.activity_bars.map(b => ({
+      id: b.template_activity_id,
       name: b.name,
       start: b.start,
       end: b.end,
@@ -435,8 +502,12 @@ const ganttData = computed(() => {
     maxDay: timeline.value.max_day,
   }
 })
+watch(() => route.params.id, loadTemplate)
 
-onMounted(loadTemplate)
+onMounted(async () => {
+  await loadTemplate()
+  onboardingStore.maybeAutoStart('template-detail')
+})
 </script>
 
 <template>
@@ -447,17 +518,29 @@ onMounted(loadTemplate)
         <span class="breadcrumb-sep">›</span>
         <span class="breadcrumb-current">{{ template?.template_name || 'Loading...' }}</span>
       </div>
-      <div style="margin-left: auto; display: flex; gap: 10px;">
-        <BaseButton variant="secondary" size="sm" @click="downloadModal = { open: true, format: 'json' }">Export</BaseButton>
-        <BaseButton variant="secondary" size="sm" @click="onDuplicate">Duplicate</BaseButton>
-        <BaseButton variant="danger" size="sm" @click="deleteModalOpen = true">Delete</BaseButton>
-        <BaseButton variant="primary" size="sm" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
+      <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+        <button type="button" class="page-help-btn" title="Show tips for this page" @click="onboardingStore.startTour('template-detail')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        <BaseButton v-if="!isHistoricalVersion" variant="primary" size="sm" data-tour="tpl-detail-edit" @click="router.push({ name: 'template-edit', params: { id: templateId } })">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
           Edit template
         </BaseButton>
+        <div class="row-menu" data-tour="tpl-detail-actions" @click.stop>
+          <button type="button" class="row-menu-trigger" @click="toggleMenu('template-actions')">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+          </button>
+          <div v-if="openMenuFor === 'template-actions'" class="row-menu-dropdown">
+            <button type="button" class="row-menu-item" @click="downloadModal = { open: true, format: 'json' }; openMenuFor = null">Export</button>
+            <button v-if="!isHistoricalVersion" type="button" class="row-menu-item" @click="onDuplicate(); openMenuFor = null">Duplicate</button>
+            <button v-if="!isHistoricalVersion" type="button" class="row-menu-item row-menu-item-danger" @click="deleteModalOpen = true; openMenuFor = null">Delete</button>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -478,7 +561,30 @@ onMounted(loadTemplate)
             <div class="meta-pills">
               <span class="meta-pill pill-version">v{{ template.template_version }}</span>
               <span v-if="template.is_current_version" class="meta-pill pill-current">Current version</span>
+              <BaseSelect
+                v-if="versions.length > 1"
+                :key="versionSelectKey"
+                class="version-select"
+                data-tour="tpl-detail-versions"
+                :model-value="''"
+                @update:model-value="(v) => { if (v) onSwitchVersion(v) }"
+              >
+                <option value="" disabled>Other versions</option>
+                <option v-for="v in versions" :key="v.template_id" :value="v.template_id">
+                  v{{ v.template_version }}{{ v.is_current_version ? ' (current)' : '' }}
+                </option>
+              </BaseSelect>
+              <BaseButton
+                v-if="!template.is_current_version"
+                variant="secondary"
+                size="sm"
+                :loading="makeCurrentLoading"
+                @click="onMakeCurrent"
+              >Make current</BaseButton>
             </div>
+          </div>
+          <div v-if="isHistoricalVersion" class="history-banner">
+            Viewing a historical version. This page is read-only; use Make current to restore this version as the live template.
           </div>
 
           <!-- CATEGORY: the one field editable directly here, no need to open Edit template -->
@@ -487,7 +593,8 @@ onMounted(loadTemplate)
             <template v-if="!categoryEditing">
               <span v-if="template.category_name" class="meta-pill pill-category">{{ template.category_name }}</span>
               <span v-else class="category-none">Uncategorised</span>
-              <button type="button" class="category-edit-btn" @click="openCategoryEdit">Change</button>
+              <button v-if="!isHistoricalVersion" type="button" class="category-edit-btn" @click="openCategoryEdit">Change</button>
+              <span v-else class="category-readonly">Read-only on historical versions</span>
             </template>
             <template v-else-if="creatingCategory">
               <BaseInput v-model="newCategoryName" placeholder="New category name" class="category-select" @keyup.enter="onCreateCategoryInline" />
@@ -525,19 +632,132 @@ onMounted(loadTemplate)
           </div>
         </div>
 
-        <div class="two-col">
+        <!-- VIEW MODE TOGGLE -->
+        <div class="view-toggle-bar" data-tour="tpl-detail-view-toggle">
+          <div class="view-toggle">
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              List
+            </button>
+            <button type="button" class="view-toggle-btn" :class="{ active: viewMode === 'gantt' }" @click="viewMode = 'gantt'">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="4" x2="8" y2="10"/></svg>
+              Gantt
+            </button>
+          </div>
+        </div>
+
+        <!-- GANTT VIEW -->
+        <div v-if="viewMode === 'gantt'" class="gantt-card">
+          <div class="gantt-header">Timeline</div>
+          <div v-if="!ganttData" class="gantt-empty">No tasks or activities to display.</div>
+          <GanttChart
+            v-else
+            :task-bars="ganttData.taskBars"
+            :activity-bars="ganttData.activityBars"
+            :max-day="ganttData.maxDay"
+            :px-per-day="32"
+          />
+        </div>
+
+        <!-- LIST VIEW -->
+        <div v-else class="two-col">
 
           <!-- LEFT -->
           <div class="col-main">
 
-            <!-- TASKS -->
-            <div class="section-card" v-if="tasks.length > 0">
+	  <!-- ACTIVITIES + their linked tasks, nested; unlinked tasks at the end -->
+            <div class="section-card" v-if="tasks.length > 0 || activities.length > 0" data-tour="tpl-detail-list">
               <div class="section-header">
-                <div class="section-title">Tasks</div>
-                <span class="section-count">{{ tasks.length }}</span>
+                <div class="section-title">Tasks & Activities</div>
+                <span class="section-count">{{ tasks.length + activities.length }}</span>
               </div>
               <div class="task-list">
-                <div v-for="task in tasks" :key="task.template_task_id" class="task-row">
+                <template v-for="act in activities" :key="'act-' + act.template_activity_id">
+                  <div class="task-row">
+                    <div class="task-row-left">
+                      <div class="task-day-badge activity-badge">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</div>
+                      <div style="flex:1; min-width:0;">
+                        <div class="task-name">{{ act.activity_name }}</div>
+                        <div class="task-meta">Spans {{ act.end_offset_days - act.start_offset_days }} days</div>
+                        <div v-if="act.description" class="task-desc">{{ act.description }}</div>
+                        <div v-if="act.note_text" class="task-note">{{ act.note_text }}</div>
+
+                        <!-- TAGS -->
+                        <div class="tag-row">
+                          <span v-for="tag in tagsForActivity(act.template_activity_id)" :key="tag.assignmentId" class="tag-chip">
+                            {{ tag.tag_name }}
+                            <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
+                          </span>
+                          <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
+                            <option value="">+ Add tag</option>
+                            <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
+                          </BaseSelect>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
+                        </div>
+                      </div>
+                      <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('activity-' + act.template_activity_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'activity-' + act.template_activity_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('activity', act); openMenuFor = null">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
+                          <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('activity', act); openMenuFor = null">Delete activity</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-for="task in tasksForActivity(act.template_activity_id)" :key="task.template_task_id" class="task-row task-row-nested">
+                    <div class="task-row-left">
+                      <div class="task-day-badge">Day {{ task.day_offset }}</div>
+                      <div style="flex:1; min-width:0;">
+                        <div class="task-name">
+                          {{ task.task_name }}
+                          <span v-if="task.is_mandatory" class="chip chip-mandatory">MANDATORY</span>
+                          <span v-if="task.is_fixed_date" class="chip chip-fixed">FIXED DATE</span>
+                        </div>
+                        <div class="task-meta">
+                          Duration: {{ task.duration_days || 1 }} day{{ task.duration_days > 1 ? 's' : '' }}
+                          <span v-if="task.reminder_lead_days"> · Reminder: {{ formatReminders(task.reminder_lead_days) }}</span>
+                        </div>
+                        <div v-if="task.description" class="task-desc">{{ task.description }}</div>
+                        <div v-if="task.note_text" class="task-note">{{ task.note_text }}</div>
+                        <div v-if="dependencies.find(d => d.task === task.template_task_id)" class="task-dep">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                            <path d="M18 9a9 9 0 0 1-9 9"/>
+                          </svg>
+                          Depends on: {{ getDependencyName(dependencies.find(d => d.task === task.template_task_id).depends_on_task) }}
+                        </div>
+
+                        <!-- TAGS -->
+                        <div class="tag-row">
+                          <span v-for="tag in tagsForTask(task.template_task_id)" :key="tag.assignmentId" class="tag-chip">
+                            {{ tag.tag_name }}
+                            <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
+                          </span>
+                          <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
+                            <option value="">+ Add tag</option>
+                            <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
+                          </BaseSelect>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
+                        </div>
+                      </div>
+                      <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
+                        <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
+                          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                        </button>
+                        <div v-if="openMenuFor === 'task-' + task.template_task_id" class="row-menu-dropdown">
+                          <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                          <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('task', task); openMenuFor = null">Delete task</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- UNLINKED TASKS (no activity) -->
+                <div v-for="task in tasks.filter(t => !t.template_activity)" :key="task.template_task_id" class="task-row">
                   <div class="task-row-left">
                     <div class="task-day-badge">Day {{ task.day_offset }}</div>
                     <div style="flex:1; min-width:0;">
@@ -564,79 +784,32 @@ onMounted(loadTemplate)
                       <div class="tag-row">
                         <span v-for="tag in tagsForTask(task.template_task_id)" :key="tag.assignmentId" class="tag-chip">
                           {{ tag.tag_name }}
-                          <button type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
+                          <button v-if="!isHistoricalVersion" type="button" class="tag-remove" @click="onRemoveTaskTag(tag.assignmentId)">×</button>
                         </span>
-                        <BaseSelect v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
+                        <BaseSelect v-if="!isHistoricalVersion" v-model="assignTarget[task.template_task_id]" class="tag-assign-select">
                           <option value="">+ Add tag</option>
                           <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
                         </BaseSelect>
-                        <button type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
+                        <button v-if="!isHistoricalVersion" type="button" class="tag-assign-btn" @click="onAssignTaskTag(task.template_task_id)">Add</button>
                       </div>
                     </div>
-                    <div class="row-actions">
-                      <button type="button" class="row-note-btn" @click="openNoteModal('task', task)">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
-                      <button type="button" class="row-delete-btn" title="Delete task" @click="openDeleteItem('task', task)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-                        </svg>
+                    <div v-if="!isHistoricalVersion" class="row-menu" @click.stop>
+                      <button type="button" class="row-menu-trigger" @click="toggleMenu('task-' + task.template_task_id)">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
                       </button>
+                      <div v-if="openMenuFor === 'task-' + task.template_task_id" class="row-menu-dropdown">
+                        <button type="button" class="row-menu-item" @click="openNoteModal('task', task); openMenuFor = null">{{ task.note_text ? 'Edit note' : 'Add note' }}</button>
+                        <button type="button" class="row-menu-item row-menu-item-danger" @click="openDeleteItem('task', task); openMenuFor = null">Delete task</button>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-
-            <div v-if="tasks.length === 0" class="empty-card">
-              No tasks defined. Click Edit template to add tasks.
-            </div>
-
-            <!-- ACTIVITIES -->
-            <div class="section-card" v-if="activities.length > 0">
-              <div class="section-header">
-                <div class="section-title">Activities</div>
-                <span class="section-count">{{ activities.length }}</span>
-              </div>
-              <div class="task-list">
-                <div v-for="act in activities" :key="act.template_activity_id" class="task-row">
-                  <div class="task-row-left">
-                    <div class="task-day-badge activity-badge">Day {{ act.start_offset_days }}–{{ act.end_offset_days }}</div>
-                    <div style="flex:1; min-width:0;">
-                      <div class="task-name">{{ act.activity_name }}</div>
-                      <div class="task-meta">Spans {{ act.end_offset_days - act.start_offset_days }} days</div>
-                      <div v-if="act.description" class="task-desc">{{ act.description }}</div>
-                      <div v-if="act.note_text" class="task-note">{{ act.note_text }}</div>
-                      <div v-if="tasksForActivity(act.template_activity_id).length > 0" class="activity-grouped-tasks">
-                        Tasks: {{ tasksForActivity(act.template_activity_id).map(t => t.task_name).join(', ') }}
-                      </div>
-
-                      <!-- TAGS -->
-                      <div class="tag-row">
-                        <span v-for="tag in tagsForActivity(act.template_activity_id)" :key="tag.assignmentId" class="tag-chip">
-                          {{ tag.tag_name }}
-                          <button type="button" class="tag-remove" @click="onRemoveActivityTag(tag.assignmentId)">×</button>
-                        </span>
-                        <BaseSelect v-model="assignTarget['act-' + act.template_activity_id]" class="tag-assign-select">
-                          <option value="">+ Add tag</option>
-                          <option v-for="t in tags" :key="t.tag_id" :value="t.tag_id">{{ t.tag_name }}</option>
-                        </BaseSelect>
-                        <button type="button" class="tag-assign-btn" @click="onAssignActivityTag(act.template_activity_id)">Add</button>
-                      </div>
-                    </div>
-                    <div class="row-actions">
-                      <button type="button" class="row-note-btn" @click="openNoteModal('activity', act)">{{ act.note_text ? 'Edit note' : 'Add note' }}</button>
-                      <button type="button" class="row-delete-btn" title="Delete activity" @click="openDeleteItem('activity', act)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="activities.length === 0 && tasks.length > 0" class="empty-card">
-              No activities defined.
+            <div v-if="tasks.length === 0 && activities.length === 0" class="empty-card">
+              {{ isHistoricalVersion
+                ? 'No tasks or activities are stored on this historical version.'
+                : 'No tasks or activities defined. Click Edit template to add some.' }}
             </div>
 
             <!-- TAG MANAGEMENT -->
@@ -648,12 +821,13 @@ onMounted(loadTemplate)
               <div class="tag-manage-body">
                 <span v-if="tags.length === 0 && suggestedTags.length === 0" class="task-meta">No tags yet — create one below, then attach it to any task or activity above.</span>
                 <span v-for="t in tags" :key="t.tag_id" class="tag-chip">{{ t.tag_name }}</span>
-                <div class="tag-create-row">
+                <div v-if="!isHistoricalVersion" class="tag-create-row">
                   <BaseInput v-model="newTagName" placeholder="New tag name" @keyup.enter="onCreateTag" />
                   <BaseButton variant="secondary" size="sm" :loading="tagLoading" @click="onCreateTag">Create tag</BaseButton>
                 </div>
+                <span v-else class="task-meta">Historical versions are read-only. Switch to the current version to create or assign tags.</span>
               </div>
-              <div v-if="suggestedTags.length > 0" class="tag-suggestions-row">
+              <div v-if="!isHistoricalVersion && suggestedTags.length > 0" class="tag-suggestions-row">
                 <span class="tag-suggestions-label">Quick add:</span>
                 <button
                   v-for="name in suggestedTags"
@@ -668,20 +842,6 @@ onMounted(loadTemplate)
               </div>
             </div>
 
-          </div>
-
-          <!-- RIGHT: GANTT -->
-          <div class="col-side">
-            <div class="gantt-card">
-              <div class="gantt-header">Timeline</div>
-              <div v-if="!ganttData" class="gantt-empty">No tasks or activities to display.</div>
-              <GanttChart
-                v-else
-                :task-bars="ganttData.taskBars"
-                :activity-bars="ganttData.activityBars"
-                :max-day="ganttData.maxDay"
-              />
-            </div>
           </div>
 
         </div>
@@ -753,6 +913,71 @@ onMounted(loadTemplate)
       <p class="modal-hint">Leaving this empty and saving removes the note. Notes never create a new template version.</p>
     </BaseModal>
 
+    <!-- TASK / ACTIVITY DETAIL MODAL -->
+    <BaseModal
+      v-model="detailModal.open"
+      :title="detailModal.type === 'task' ? detailModal.item?.task_name : detailModal.item?.activity_name"
+    >
+      <div v-if="detailModal.item" class="detail-view">
+
+        <template v-if="detailModal.type === 'task'">
+          <div class="detail-row"><span class="detail-label">Day offset</span><span class="detail-value">Day {{ detailModal.item.day_offset }}</span></div>
+          <div class="detail-row"><span class="detail-label">Duration</span><span class="detail-value">{{ detailModal.item.duration_days || 1 }} day{{ detailModal.item.duration_days > 1 ? 's' : '' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Mandatory</span><span class="detail-value">{{ detailModal.item.is_mandatory ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Fixed date</span><span class="detail-value">{{ detailModal.item.is_fixed_date ? 'Yes' : 'No' }}</span></div>
+          <div class="detail-row"><span class="detail-label">Reminders</span><span class="detail-value">{{ formatReminders(detailModal.item.reminder_lead_days) }}</span></div>
+          <div v-if="activities.find(a => a.template_activity_id === detailModal.item.template_activity)" class="detail-row">
+            <span class="detail-label">Linked activity</span>
+            <span class="detail-value">{{ activities.find(a => a.template_activity_id === detailModal.item.template_activity).activity_name }}</span>
+          </div>
+          <div v-if="dependencies.find(d => d.task === detailModal.item.template_task_id)" class="detail-row">
+            <span class="detail-label">Depends on</span>
+            <span class="detail-value">{{ getDependencyName(dependencies.find(d => d.task === detailModal.item.template_task_id).depends_on_task) }}</span>
+          </div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForTask(detailModal.item.template_task_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForTask(detailModal.item.template_task_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="detail-row"><span class="detail-label">Start day</span><span class="detail-value">Day {{ detailModal.item.start_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">End day</span><span class="detail-value">Day {{ detailModal.item.end_offset_days }}</span></div>
+          <div class="detail-row"><span class="detail-label">Spans</span><span class="detail-value">{{ detailModal.item.end_offset_days - detailModal.item.start_offset_days }} days</span></div>
+          <div class="detail-row"><span class="detail-label">Linked tasks</span><span class="detail-value">{{ tasks.filter(t => t.template_activity === detailModal.item.template_activity_id).length }}</span></div>
+          <div v-if="detailModal.item.description" class="detail-block">
+            <div class="detail-block-label">Description</div>
+            <p class="detail-block-text">{{ detailModal.item.description }}</p>
+          </div>
+          <div v-if="detailModal.item.note_text" class="detail-block">
+            <div class="detail-block-label">Note</div>
+            <p class="detail-block-text">{{ detailModal.item.note_text }}</p>
+          </div>
+          <div v-if="tagNamesForActivity(detailModal.item.template_activity_id).length > 0" class="detail-block">
+            <div class="detail-block-label">Tags</div>
+            <div class="detail-tags">
+              <span v-for="name in tagNamesForActivity(detailModal.item.template_activity_id)" :key="name" class="detail-tag">{{ name }}</span>
+            </div>
+          </div>
+        </template>
+
+      </div>
+
+      <template #footer>
+        <BaseButton variant="secondary" @click="detailModal.open = false">Close</BaseButton>
+      </template>
+    </BaseModal>
+
   </AppLayout>
 </template>
 
@@ -770,6 +995,8 @@ onMounted(loadTemplate)
 .breadcrumb-link:hover { color: var(--violet); }
 .breadcrumb-sep { color: var(--text-muted); }
 .breadcrumb-current { color: var(--text-primary); font-weight: 500; }
+.page-help-btn { width: 34px; height: 34px; border-radius: var(--radius-md); border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); }
+.page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
 .detail-page { display: flex; flex-direction: column; gap: 20px; }
 .loading-msg { font-size: var(--font-label); color: var(--text-muted); padding: 40px 0; }
@@ -778,9 +1005,12 @@ onMounted(loadTemplate)
 /* HEADER CARD */
 .info-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 20px 24px; }
 .info-card-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; gap: 16px; }
+.history-banner { margin-bottom: 18px; padding: 10px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-md); background: var(--bg-page); font-size: var(--font-label); color: var(--text-secondary); }
 .template-title { font-size: var(--font-heading); font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; margin-bottom: 4px; }
 .template-desc { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; }
 .meta-pills { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.version-select { width: 150px; }
+.version-select :deep(.base-select) { height: 30px; padding: 0 26px 0 10px; font-size: var(--font-hint); }
 .meta-pill { font-size: var(--font-upper); font-weight: 500; padding: 4px 12px; border-radius: 20px; }
 .pill-version { background: var(--violet-bg); color: var(--violet); }
 .pill-current { background: var(--success-bg); color: #15803D; }
@@ -790,6 +1020,7 @@ onMounted(loadTemplate)
 .category-none { font-size: var(--font-label); color: var(--text-muted); font-style: italic; }
 .category-edit-btn { font-size: var(--font-label); font-weight: 600; color: var(--violet); background: none; border: none; cursor: pointer; font-family: var(--font-main); padding: 0; }
 .category-edit-btn:hover { text-decoration: underline; }
+.category-readonly { font-size: var(--font-label); color: var(--text-muted); }
 .category-select { width: 220px; }
 .category-select :deep(.base-select) { height: 34px; }
 
@@ -798,6 +1029,13 @@ onMounted(loadTemplate)
 .meta-value { font-size: var(--font-body); font-weight: 600; color: var(--text-primary); }
 
 /* TWO COL */
+/* ── VIEW TOGGLE ── */
+.view-toggle-bar { display: flex; align-items: center; }
+.view-toggle { display: flex; align-items: center; gap: 4px; background: var(--bg-page); border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 3px; }
+.view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border: none; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: var(--font-label); font-weight: 500; font-family: var(--font-main); cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast); }
+.view-toggle-btn.active { background: var(--white); color: var(--violet); box-shadow: var(--shadow-sm); }
+.view-toggle-btn:hover:not(.active) { color: var(--text-primary); }
+
 .two-col { display: flex; gap: 20px; align-items: flex-start; }
 .col-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .col-side { width: 380px; flex-shrink: 0; position: sticky; top: 80px; }
@@ -809,8 +1047,11 @@ onMounted(loadTemplate)
 .section-count { font-size: var(--font-upper); font-weight: 600; background: var(--violet-bg); color: var(--violet); padding: 2px 10px; border-radius: 20px; }
 
 .task-list { display: flex; flex-direction: column; }
-.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); }
+.task-row { display: flex; padding: 14px 20px; border-bottom: 1px solid var(--border-light); cursor: pointer; transition: background var(--transition-fast); }
+.task-row-nested { padding-left: 48px; background: var(--bg-page); }
 .task-row:last-child { border-bottom: none; }
+.task-row:hover { background: var(--bg-page); }
+.task-row-linked { padding-left: 44px; }
 .task-row-left { display: flex; gap: 14px; align-items: flex-start; width: 100%; }
 
 .task-day-badge { font-size: var(--font-upper); font-weight: 600; color: var(--violet); background: var(--violet-bg); padding: 4px 10px; border-radius: 6px; flex-shrink: 0; white-space: nowrap; }
@@ -828,18 +1069,57 @@ onMounted(loadTemplate)
 
 .empty-card { background: var(--white); border: 1px solid var(--border-light); border-radius: var(--radius-lg); padding: 28px 20px; font-size: var(--font-label); color: var(--text-muted); text-align: center; }
 
-/* ROW DELETE BUTTON */
-.row-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
-.row-delete-btn svg { width: 13px; height: 13px; stroke: var(--text-muted); }
-.row-delete-btn:hover { border-color: #FECACA; background: var(--danger-bg); }
-.row-delete-btn:hover svg { stroke: var(--danger); }
 
-.row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
-.row-note-btn { font-size: var(--font-hint); font-weight: 600; color: var(--text-secondary); background: var(--white); border: 1px solid var(--border-light); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-family: var(--font-main); white-space: nowrap; }
-.row-note-btn:hover { background: var(--bg-page); }
+/* ── ROW OVERFLOW MENU ──
+   Secondary per-row actions (note, delete) collapse behind a "⋯"
+   trigger instead of sitting as always-visible buttons. */
+.row-menu { position: relative; flex-shrink: 0; }
+.row-menu-trigger {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.row-menu-trigger svg { width: 15px; height: 15px; }
+.row-menu-trigger:hover { background: var(--bg-page); border-color: var(--border); }
+.row-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--white);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  padding: 4px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+}
+.row-menu-item {
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  font-size: var(--font-label);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: var(--font-main);
+  white-space: nowrap;
+}
+.row-menu-item:hover { background: var(--bg-page); }
+.row-menu-item-danger { color: var(--danger); }
+.row-menu-item-danger:hover { background: var(--danger-bg); }
 
 .task-note { font-size: var(--font-label); color: var(--text-secondary); margin-top: 4px; font-style: italic; }
-.activity-grouped-tasks { font-size: var(--font-upper); color: var(--text-muted); margin-top: 5px; }
 
 .field-label-modal { display: block; font-size: var(--font-label); font-weight: 500; color: var(--text-primary); margin-bottom: 6px; }
 .note-textarea { width: 100%; padding: 9px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-md); font-family: var(--font-main); font-size: var(--font-label); color: var(--text-primary); resize: vertical; box-sizing: border-box; }
