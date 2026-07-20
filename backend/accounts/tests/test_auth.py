@@ -16,7 +16,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
 from accounts.forms import format_password_reset_expiry
-from accounts.models import AuthSession
+from accounts.models import AuthSession, ShareNotification
 from cycles.models import CycleInstance
 from templates_mgmt.models import Template
 
@@ -212,6 +212,66 @@ class AuthApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], "alice")
+
+    def test_user_search_requires_authentication(self):
+        response = self.client.get(reverse("auth-user-search"), {"q": "ali"})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_user_search_returns_matching_usernames_and_excludes_self(self):
+        User.objects.create_user(
+            username="alina",
+            email="alina@example.com",
+            password="StrongPass456!",
+        )
+        User.objects.create_user(
+            username="bob",
+            email="bob@example.com",
+            password="StrongPass456!",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.get(reverse("auth-user-search"), {"q": "ali"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["username"] for item in response.data], ["alina"])
+
+    def test_share_notifications_list_and_mark_read(self):
+        sender = User.objects.create_user(
+            username="sender",
+            email="sender@example.com",
+            password="StrongPass456!",
+        )
+        template = Template.objects.create(user=self.user, template_name="Shared Checklist")
+        notification = ShareNotification.objects.create(
+            recipient=self.user,
+            sender=sender,
+            template=template,
+            template_name="Shared Checklist",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        list_response = self.client.get(reverse("auth-share-notifications"))
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["notification_id"], notification.notification_id)
+        self.assertEqual(list_response.data[0]["sender_username"], "sender")
+
+        mark_read_response = self.client.post(
+            reverse("auth-share-notifications-mark-read"),
+            {"ids": [notification.notification_id]},
+            format="json",
+        )
+
+        self.assertEqual(mark_read_response.status_code, status.HTTP_200_OK)
+        notification.refresh_from_db()
+        self.assertTrue(notification.is_read)
+
+        after_response = self.client.get(reverse("auth-share-notifications"))
+        self.assertEqual(after_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(after_response.data, [])
 
     def test_me_patch_updates_profile_fields(self):
         login_response = self.login_and_get_tokens()

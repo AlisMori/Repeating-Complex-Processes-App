@@ -65,3 +65,22 @@ export function reportActivity() {
     },
   )
 }
+
+export function searchUsers(query) {
+  return api.get('/auth/users/search/', {
+    params: { q: query },
+    requiresAuth: true,
+  })
+}
+
+export function getShareNotifications() {
+  return api.get('/auth/share-notifications/', { requiresAuth: true })
+}
+
+export function markShareNotificationsRead(ids = []) {
+  return api.post(
+    '/auth/share-notifications/mark-read/',
+    { ids },
+    { requiresAuth: true },
+  )
+}

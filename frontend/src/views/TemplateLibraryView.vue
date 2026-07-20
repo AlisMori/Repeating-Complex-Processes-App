@@ -1,7 +1,7 @@
 <!-- /frontend/src/views/TemplateLibraryView.vue -->
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -10,6 +10,7 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import SmartSearch from '@/components/search/SmartSearch.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useToastStore } from '@/stores/toast'
+import { searchUsers } from '@/api/auth'
 import {
   getTemplates,
   duplicateTemplate,
@@ -30,11 +31,16 @@ const showAllVersions = ref(false)
 
 const searchQuery = ref('')
 const groupByCategory = ref(false)
-const shareModal = ref({ open: false, templateId: null, username: '' })
+const shareModal = ref({ open: false, templateId: null, templateName: '', username: '' })
 const shareError = ref('')
 const shareLoading = ref(false)
+const shareSearchLoading = ref(false)
+const shareSuggestions = ref([])
+const shareSelectedUsername = ref('')
+const shareSuccessModal = ref({ open: false, username: '', templateName: '' })
 const deleteModal = ref({ open: false, templateId: null })
 const deleteLoading = ref(false)
+let shareSearchTimer = null
 
 // filteredTemplates used to also filter by a "category" field that
 // doesn't exist on the backend Template model — removed rather than
@@ -106,8 +112,16 @@ async function onDownload(id) {
 }
 
 function openShareModal(id) {
-  shareModal.value = { open: true, templateId: id, username: '' }
+  const selectedTemplate = templates.value.find((tpl) => String(tpl.template_id || tpl.id) === String(id))
+  shareModal.value = {
+    open: true,
+    templateId: id,
+    templateName: selectedTemplate?.template_name || 'this template',
+    username: '',
+  }
   shareError.value = ''
+  shareSuggestions.value = []
+  shareSelectedUsername.value = ''
 }
 
 async function onShare() {
@@ -118,15 +132,63 @@ async function onShare() {
   shareLoading.value = true
   shareError.value = ''
   try {
-    await shareTemplate(shareModal.value.templateId, shareModal.value.username.trim())
+    const username = shareModal.value.username.trim()
+    await shareTemplate(shareModal.value.templateId, username)
     shareModal.value.open = false
-    toast.success('Template shared successfully.')
+    shareSuccessModal.value = {
+      open: true,
+      username,
+      templateName: shareModal.value.templateName,
+    }
   } catch (e) {
     shareError.value = getErrorMessage(e, 'User not found.')
   } finally {
     shareLoading.value = false
   }
 }
+
+async function loadUserSuggestions(query) {
+  const trimmedQuery = query.trim()
+  if (!trimmedQuery) {
+    shareSuggestions.value = []
+    shareSearchLoading.value = false
+    return
+  }
+
+  shareSearchLoading.value = true
+  try {
+    const { data } = await searchUsers(trimmedQuery)
+    shareSuggestions.value = Array.isArray(data) ? data : (data.results || [])
+  } catch {
+    shareSuggestions.value = []
+  } finally {
+    shareSearchLoading.value = false
+  }
+}
+
+function chooseShareUser(username) {
+  shareModal.value.username = username
+  shareSelectedUsername.value = username
+  shareSuggestions.value = []
+  shareError.value = ''
+}
+
+watch(
+  () => shareModal.value.username,
+  (value) => {
+    if (!shareModal.value.open) return
+    shareSelectedUsername.value = ''
+    shareError.value = ''
+    if (shareSearchTimer) clearTimeout(shareSearchTimer)
+    shareSearchTimer = setTimeout(() => {
+      loadUserSuggestions(value)
+    }, 180)
+  },
+)
+
+onUnmounted(() => {
+  if (shareSearchTimer) clearTimeout(shareSearchTimer)
+})
 
 function openDeleteModal(id) {
   deleteModal.value = { open: true, templateId: id }
@@ -350,10 +412,11 @@ onMounted(async () => {
       v-model="shareModal.open"
       title="Share template"
       confirm-label="Share"
+      :confirm-disabled="!shareModal.username.trim()"
       :loading="shareLoading"
       @confirm="onShare"
     >
-      <p class="modal-desc">Enter the username of a registered Recurra user. They will receive an independent copy of this template.</p>
+      <p class="modal-desc">Search for a registered Recurra user. They will receive an independent copy of this template.</p>
       <BaseInput
         v-model="shareModal.username"
         label="Username"
@@ -361,6 +424,41 @@ onMounted(async () => {
         :error="shareError"
         @keyup.enter="onShare"
       />
+      <div class="share-search-meta">
+        <span v-if="shareSearchLoading">Searching users...</span>
+        <span v-else-if="shareSelectedUsername">Selected: {{ shareSelectedUsername }}</span>
+        <span v-else-if="shareModal.username.trim() && shareSuggestions.length === 0">No matching usernames yet.</span>
+        <span v-else>Start typing to find a username.</span>
+      </div>
+      <div v-if="shareSuggestions.length > 0" class="share-suggestions">
+        <button
+          v-for="suggestion in shareSuggestions"
+          :key="suggestion.id"
+          type="button"
+          class="share-suggestion-btn"
+          @click="chooseShareUser(suggestion.username)"
+        >
+          <span class="share-suggestion-name">{{ suggestion.username }}</span>
+          <span class="share-suggestion-hint">Use this username</span>
+        </button>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      v-model="shareSuccessModal.open"
+      title="Template Shared"
+      confirm-label=""
+    >
+      <div class="share-success-card">
+        <div class="share-success-badge">Shared</div>
+        <div class="share-success-title">{{ shareSuccessModal.templateName }}</div>
+        <div class="share-success-copy">
+          {{ shareSuccessModal.username }} will see this shared template the next time they sign in.
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton variant="primary" @click="shareSuccessModal.open = false">Done</BaseButton>
+      </template>
     </BaseModal>
 
     <!-- DELETE CONFIRM MODAL -->
@@ -405,6 +503,46 @@ onMounted(async () => {
 .page-help-btn:hover { background: var(--violet-bg); color: var(--violet); }
 
 .library-page { display: flex; flex-direction: column; gap: 16px; }
+.modal-desc { margin: 0 0 12px; line-height: 1.5; color: var(--text-secondary); }
+.share-search-meta { margin-top: 10px; font-size: var(--font-hint); color: var(--text-muted); }
+.share-suggestions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.share-suggestion-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--white);
+  cursor: pointer;
+  font-family: var(--font-main);
+  text-align: left;
+}
+.share-suggestion-btn:hover { border-color: #C4B5FD; background: #F8F5FF; }
+.share-suggestion-name { font-size: var(--font-label); font-weight: 600; color: var(--text-primary); }
+.share-suggestion-hint { font-size: var(--font-hint); color: var(--text-muted); }
+.share-success-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 10px 0 4px;
+}
+.share-success-badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #DCFCE7;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.share-success-title { font-size: var(--font-title); font-weight: 700; color: var(--text-primary); }
+.share-success-copy { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.6; max-width: 360px; }
 
 .error-box { background: var(--danger-bg); border: 1px solid #FECACA; border-radius: var(--radius-md); padding: 12px 16px; font-size: var(--font-label); color: #B91C1C; }
 .loading-msg { font-size: var(--font-label); color: var(--text-muted); padding: 20px 0; }

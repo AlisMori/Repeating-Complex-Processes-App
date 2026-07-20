@@ -4,12 +4,15 @@ from .views import (
     ChangePasswordView,
     DeleteAccountView,
     LoginView,
+    MarkShareNotificationsReadView,
     LogoutView,
     MeView,
     PasswordResetConfirmView,
     PasswordResetView,
     RegisterView,
+    ShareNotificationsView,
     SlidingTokenRefreshView,
+    UserSearchView,
 )
 
 urlpatterns = [
@@ -29,6 +32,17 @@ urlpatterns = [
     ),
     path("token/refresh/", SlidingTokenRefreshView.as_view(), name="auth-token-refresh"),
     path("activity/", ActivityView.as_view(), name="auth-activity"),
+    path("users/search/", UserSearchView.as_view(), name="auth-user-search"),
+    path(
+        "share-notifications/",
+        ShareNotificationsView.as_view(),
+        name="auth-share-notifications",
+    ),
+    path(
+        "share-notifications/mark-read/",
+        MarkShareNotificationsReadView.as_view(),
+        name="auth-share-notifications-mark-read",
+    ),
     path("me/", MeView.as_view(), name="auth-me"),
     path("change-password/", ChangePasswordView.as_view(), name="auth-change-password"),
     path("delete-account/", DeleteAccountView.as_view(), name="auth-delete-account"),

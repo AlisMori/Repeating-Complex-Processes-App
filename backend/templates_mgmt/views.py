@@ -20,6 +20,7 @@ from cycles.dependency_engine import (
     DependencyConflict,
     revalidate_task_offsets,
 )
+from accounts.models import ShareNotification
 from cycles.services import generate_cycle_runtime_records, validate_activity_bounds
 from cycles.models import CycleInstance, TaskDependency
 from .scheduling import resolve_effective_offsets
@@ -425,6 +426,12 @@ class TemplateViewSet(viewsets.ModelViewSet):
             )
 
             deep_copy_template_contents(original_template, shared_template)
+            ShareNotification.objects.create(
+                recipient=target_user,
+                sender=request.user,
+                template=shared_template,
+                template_name=original_template.template_name,
+            )
 
         return Response(
             {

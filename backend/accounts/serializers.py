@@ -16,7 +16,7 @@ from .auth_sessions import (
     serialize_session_window,
 )
 from .forms import SafeMessageIdPasswordResetForm
-from .models import AuthSession
+from .models import AuthSession, ShareNotification
 from .password_reset import (
     PASSWORD_RESET_TOKEN_STATUS_EXPIRED,
     PASSWORD_RESET_TOKEN_STATUS_VALID,
@@ -120,6 +120,28 @@ class LoginUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "email"]
+
+
+class UserLookupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username"]
+
+
+class ShareNotificationSerializer(serializers.ModelSerializer):
+    sender_username = serializers.CharField(source="sender.username", read_only=True)
+
+    class Meta:
+        model = ShareNotification
+        fields = [
+            "notification_id",
+            "sender_username",
+            "template_name",
+            "template",
+            "is_read",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class RegisterSerializer(serializers.ModelSerializer):

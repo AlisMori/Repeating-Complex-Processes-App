@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
+from django.contrib.auth import get_user_model
 
 from .password_reset import (
     PASSWORD_RESET_TOKEN_STATUS_EXPIRED,
@@ -24,10 +25,16 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    ShareNotificationSerializer,
     SlidingTokenRefreshSerializer,
     UserSerializer,
+    UserLookupSerializer,
     UserProfileUpdateSerializer,
 )
+from .models import ShareNotification
+
+
+User = get_user_model()
 
 
 class RegisterView(APIView):
@@ -153,6 +160,46 @@ class ActivityView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class UserSearchView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        query = (request.query_params.get("q") or "").strip()
+        if not query:
+            return Response([], status=status.HTTP_200_OK)
+
+        users = User.objects.filter(username__icontains=query).exclude(pk=request.user.pk).order_by(
+            "username"
+        )[:8]
+        return Response(UserLookupSerializer(users, many=True).data, status=status.HTTP_200_OK)
+
+
+class ShareNotificationsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        notifications = ShareNotification.objects.filter(
+            recipient=request.user,
+            is_read=False,
+        ).select_related("sender", "template")
+        return Response(
+            ShareNotificationSerializer(notifications, many=True).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class MarkShareNotificationsReadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        ids = request.data.get("ids") or []
+        queryset = ShareNotification.objects.filter(recipient=request.user, is_read=False)
+        if ids:
+            queryset = queryset.filter(notification_id__in=ids)
+        updated = queryset.update(is_read=True)
+        return Response({"updated": updated}, status=status.HTTP_200_OK)
 
 
 class SlidingTokenRefreshView(TokenRefreshView):
