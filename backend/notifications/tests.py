@@ -1,21 +1,24 @@
+from datetime import date, timedelta
+from unittest.mock import patch
+
 from django.apps import apps as global_apps
-from django.test import TestCase
 from django.core import mail
-from django.utils import timezone
+from django.core.management import call_command
+from django.test import TestCase, override_settings
 from django_q.models import Schedule
 
-from notifications.scheduler import register_scheduler, register_scheduler_on_migrate
-
-import datetime
-
-from cycles.models import CycleInstance, CycleTask, CycleActivity, TaskDependency
-from templates_mgmt.models import Template, TemplateActivity,TemplateTask
 from accounts.models import User
+from cycles.models import CycleInstance, CycleTask
+from notifications.models import NotificationDelivery
+from notifications.scheduler import register_scheduler, register_scheduler_on_migrate
+from notifications.services import send_reminder_email as real_send_reminder_email
+from notifications.tasks import MAX_NOTIFICATION_ATTEMPTS, check_notifications
+from templates_mgmt.models import Template, TemplateTask
 
-from notifications.tasks import check_notifications
 
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class NotificationSchedulerRegistrationTests(TestCase):
-    def test_register_scheduler_is_idempotent(self):
+    def test_register_scheduler_is_idempotent_and_runs_every_five_minutes(self):
         first_schedule, first_created = register_scheduler()
         second_schedule, second_created = register_scheduler()
 
@@ -23,7 +26,8 @@ class NotificationSchedulerRegistrationTests(TestCase):
         self.assertEqual(first_schedule.pk, second_schedule.pk)
         self.assertIn(first_created, (True, False))
         self.assertEqual(first_schedule.name, "check_notifications")
-        self.assertEqual(first_schedule.schedule_type, Schedule.DAILY)
+        self.assertEqual(first_schedule.schedule_type, Schedule.MINUTES)
+        self.assertEqual(first_schedule.minutes, 5)
         self.assertEqual(first_schedule.repeats, -1)
         self.assertEqual(
             Schedule.objects.filter(func="notifications.tasks.check_notifications").count(),
@@ -36,202 +40,164 @@ class NotificationSchedulerRegistrationTests(TestCase):
 
         schedule = Schedule.objects.get(func="notifications.tasks.check_notifications")
         self.assertEqual(schedule.name, "check_notifications")
-        self.assertEqual(schedule.schedule_type, Schedule.DAILY)
+        self.assertEqual(schedule.schedule_type, Schedule.MINUTES)
+        self.assertEqual(schedule.minutes, 5)
         self.assertEqual(schedule.repeats, -1)
 
 
-
-
-class NotificationsTest(TestCase):
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class NotificationDeliveryTests(TestCase):
     def setUp(self):
-        self.today = timezone.localdate()
-        # 1. Set Up Users
-        # Create a user who wants notifications
-        self.user = User.objects.create(
-            password="recurrabestapp1!",
-            last_login= None,
-            is_superuser= False,
-            username= "er",
-            first_name="Iskandar",
-            last_name="Chekayev",
-            email="example@gmail.com",
-            is_staff=False,
-            is_active=True,
-            date_joined=datetime.datetime(2026, 7, 14, 11, 46, 11, 99947, tzinfo = datetime.timezone.utc),
-            notification_opt_in= True,
-            created_at= datetime.datetime(
-            2026, 7, 14, 11, 46, 11, 612017, tzinfo=datetime.timezone.utc))
-
-        self.user = User.objects.create(
-            password="recurrabestapp2@",
-            last_login=None,
-            is_superuser=False,
-            username="re",
-            first_name="Iskandar",
-            last_name="Zalishew",
-            email="example@gmail.com",
-            is_staff=False,
-            is_active=True,
-            date_joined=datetime.datetime(2026, 7, 14, 11, 46, 11, 99947, tzinfo=datetime.timezone.utc),
+        self.today = date(2026, 7, 20)
+        self.user = User.objects.create_user(
+            username="notify-user",
+            email="notify@example.com",
+            password="strong-password-1",
             notification_opt_in=True,
-            created_at=datetime.datetime(
-                2026, 7, 14, 11, 46, 11, 612017, tzinfo=datetime.timezone.utc))
-
-        # 2. Set Up Templates, Activities and Tasks with Dependencies
-        self.test_template = Template.objects.create(
+        )
+        self.template = Template.objects.create(
             user=self.user,
-            template_name="Unit Coordination",
+            template_name="Notification Template",
         )
-
-        # Template tasks
-        self.template_task1 = TemplateTask.objects.create(
-            template=self.test_template,
-            task_name="Lab2",
+        self.template_task = TemplateTask.objects.create(
+            template=self.template,
+            task_name="Reminder Task",
             day_offset=0,
             duration_days=1,
         )
-
-        self.template_task2 = TemplateTask.objects.create(
-            template=self.test_template,
-            task_name="Lab8",
-            day_offset=0,
-            duration_days=1,
-        )
-
-        self.template_task3 = TemplateTask.objects.create(
-            template=self.test_template,
-            task_name="Assignment1",
-            day_offset=0,
-            duration_days=1,
-        )
-
-        self.template_task4 = TemplateTask.objects.create(
-            template=self.test_template,
-            task_name="Assignment2",
-            day_offset=0,
-            duration_days=1,
-        )
-
-        self.template_task5 = TemplateTask.objects.create(
-            template=self.test_template,
-            task_name="Exam",
-            day_offset=0,
-            duration_days=1,
-        )
-
-        # Sample Activity
-        self.template_activity = TemplateActivity.objects.create(
-            template=self.test_template,
-            activity_name="Teaching",
-            start_offset_days=0,
-            end_offset_days=30,
-        )
-
-
-        # 3. Set Up Cycles with its Activities and Tasks
-        # Create a running cycle
         self.cycle = CycleInstance.objects.create(
             user=self.user,
-            template=self.test_template,
-            start_date=datetime.date(2026, 6, 19),
-            status="running"
+            template=self.template,
+            cycle_name="Notification Cycle",
+            start_date=self.today - timedelta(days=3),
+            status="running",
         )
 
-        # Create task with one seven day reminder
-        self.task_7_day_reminder = CycleTask.objects.create(
+    def _make_task(
+        self,
+        *,
+        task_name="Reminder Task",
+        start_delta_days=0,
+        end_delta_days=1,
+        reminders=None,
+        status="pending",
+    ):
+        return CycleTask.objects.create(
             cycle=self.cycle,
-            template_task=self.template_task1,
-            task_name="Lab2",
-            calculated_start_date=self.today + datetime.timedelta(days=7),
-            calculated_end_date=self.today + datetime.timedelta(days=8),
-            reminder_lead_days=[7,],
-            status=False
+            template_task=self.template_task,
+            task_name=task_name,
+            calculated_start_date=self.today + timedelta(days=start_delta_days),
+            calculated_end_date=self.today + timedelta(days=end_delta_days),
+            reminder_lead_days=reminders,
+            status=status,
         )
 
-        # Create task with one three day reminder
-        self.task_3_day_reminder = CycleTask.objects.create(
-            cycle=self.cycle,
-            template_task=self.template_task2,
-            task_name="Lab8",
-            calculated_start_date=self.today + datetime.timedelta(days=3),
-            calculated_end_date=self.today + datetime.timedelta(days=4),
-            reminder_lead_days=[3,],
-            status=False
+    def test_successful_delivery_is_persisted_once(self):
+        task = self._make_task(reminders=[0])
+
+        check_notifications(today=self.today)
+        check_notifications(today=self.today)
+
+        self.assertEqual(len(mail.outbox), 1)
+        delivery = NotificationDelivery.objects.get(task=task, notification_key="reminder:0")
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_SENT)
+        self.assertEqual(delivery.attempt_count, 1)
+        self.assertIsNotNone(delivery.sent_at)
+        self.assertEqual(delivery.last_error, "")
+
+    def test_failure_is_retried_and_then_succeeds(self):
+        task = self._make_task(reminders=[0])
+
+        attempts = {"count": 0}
+
+        def flaky_send(user, cycle, cycle_task):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("smtp down")
+            return real_send_reminder_email(user, cycle, cycle_task)
+
+        with patch("notifications.tasks.send_reminder_email", side_effect=flaky_send):
+            check_notifications(today=self.today)
+            first = NotificationDelivery.objects.get(task=task, notification_key="reminder:0")
+            self.assertEqual(first.status, NotificationDelivery.STATUS_PENDING)
+            self.assertEqual(first.attempt_count, 1)
+            self.assertEqual(len(mail.outbox), 0)
+
+            check_notifications(today=self.today)
+
+        delivery = NotificationDelivery.objects.get(task=task, notification_key="reminder:0")
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_SENT)
+        self.assertEqual(delivery.attempt_count, 2)
+        self.assertIsNotNone(delivery.sent_at)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_retry_limit_marks_final_failure(self):
+        task = self._make_task(reminders=[0])
+
+        with patch("notifications.tasks.send_reminder_email", side_effect=RuntimeError("still failing")):
+            check_notifications(today=self.today)
+            check_notifications(today=self.today)
+            check_notifications(today=self.today)
+
+        delivery = NotificationDelivery.objects.get(task=task, notification_key="reminder:0")
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_FAILED)
+        self.assertEqual(delivery.attempt_count, MAX_NOTIFICATION_ATTEMPTS)
+        self.assertIsNotNone(delivery.final_failure_at)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_overdue_notification_is_sent_once_across_repeated_runs(self):
+        overdue_task = self._make_task(
+            task_name="Overdue Task",
+            start_delta_days=-5,
+            end_delta_days=-1,
         )
 
-        # Create task with one current day reminder
-        self.task_0_day_reminder = CycleTask.objects.create(
-            cycle=self.cycle,
-            template_task=self.template_task3,
-            task_name="Assignment1",
-            calculated_start_date=self.today,
-            calculated_end_date=self.today + datetime.timedelta(days=1),
-            reminder_lead_days=[0,],
-            status=False
+        check_notifications(today=self.today)
+        check_notifications(today=self.today)
+        check_notifications(today=self.today)
+
+        self.assertEqual(len(mail.outbox), 1)
+        delivery = NotificationDelivery.objects.get(task=overdue_task, notification_key="overdue")
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_SENT)
+        self.assertEqual(delivery.attempt_count, 1)
+
+    def test_overdue_failure_does_not_mark_sent_before_success(self):
+        overdue_task = self._make_task(
+            task_name="Broken Overdue Task",
+            start_delta_days=-5,
+            end_delta_days=-1,
         )
 
-        # Overdue task
-        self.overdue_task = CycleTask.objects.create(
-            cycle=self.cycle,
-            template_task=self.template_task4,
-            task_name="Assignment2",
-            calculated_start_date=self.today + datetime.timedelta(days=-1),
-            calculated_end_date=self.today,
-            reminder_lead_days=[7, 3, 0],
-            status=False
-        )
+        with patch("notifications.tasks.send_overdue_email", side_effect=RuntimeError("mail failure")):
+            check_notifications(today=self.today)
 
-        # Multiple reminders task
-        self.task_7_day_reminder = CycleTask.objects.create(
-            cycle=self.cycle,
-            template_task=self.template_task5,
-            task_name="Exam",
-            calculated_start_date=self.today + datetime.timedelta(days=7),
-            calculated_end_date=self.today + datetime.timedelta(days=8),
-            reminder_lead_days=[7, 3, 0],
-            status=False
-        )
+        delivery = NotificationDelivery.objects.get(task=overdue_task, notification_key="overdue")
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_PENDING)
+        self.assertEqual(delivery.attempt_count, 1)
+        self.assertIsNone(delivery.sent_at)
+        self.assertEqual(len(mail.outbox), 0)
 
-        # Test Cycle Activity
-        self.test_cycle_activity = CycleActivity.objects.create(
-            cycle=self.cycle,
-            template_activity=self.template_activity,
-            activity_name="Teaching",
-            calculated_start_date=datetime.date(2026, 6, 19),
-            calculated_end_date=datetime.date(2026, 7, 19),
-        )
+    def test_notification_opt_out_skips_delivery(self):
+        self.user.notification_opt_in = False
+        self.user.save(update_fields=["notification_opt_in"])
+        self._make_task(reminders=[0])
 
-    def test_setUp(self):
-        self.assertEqual(User.objects.count(), 2)
-        self.assertEqual(Template.objects.count(), 1)
-        self.assertEqual(TemplateTask.objects.count(), 5)
-        self.assertEqual(TemplateActivity.objects.count(), 1)
-        self.assertEqual(CycleInstance.objects.count(), 1)
-        self.assertEqual(CycleTask.objects.count(), 5)
-        self.assertEqual(CycleActivity.objects.count(), 1)
+        check_notifications(today=self.today)
 
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(NotificationDelivery.objects.count(), 0)
 
+    def test_tests_use_locmem_backend_and_send_no_real_emails(self):
+        task = self._make_task(reminders=[0])
 
-    def test_opted_users(self):
-        check_notifications()
-        self.assertEqual(len(mail.outbox), 4)
+        check_notifications(today=self.today)
 
-    def test_7day_reminders(self):
-        check_notifications()
-        self.assertEqual(len(mail.outbox), 4)
+        self.assertEqual(mail.outbox[0].to, ["notify@example.com"])
+        self.assertEqual(NotificationDelivery.objects.get(task=task, notification_key="reminder:0").status, "sent")
 
-    def test_3day_reminders(self):
-        check_notifications()
-        self.assertEqual(len(mail.outbox), 4)
+    def test_management_command_registers_five_minute_schedule(self):
+        call_command("setup_notification_schedule")
 
-    def test_on_day_reminders(self):
-        check_notifications()
-        self.assertEqual(len(mail.outbox), 4)
-
-    def test_overdue_notifications(self):
-        check_notifications()
-        self.assertEqual(len(mail.outbox), 4)
-
-
-
-
+        schedule = Schedule.objects.get(func="notifications.tasks.check_notifications")
+        self.assertEqual(schedule.schedule_type, Schedule.MINUTES)
+        self.assertEqual(schedule.minutes, 5)
