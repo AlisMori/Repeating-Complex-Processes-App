@@ -167,7 +167,7 @@ async function fetchTemplates() {
     })
 
     templates.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load templates.'
   }
 }
@@ -182,7 +182,7 @@ async function fetchTasks() {
     })
 
     tasks.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load tasks.'
   } finally {
     loading.value = false
@@ -203,7 +203,7 @@ async function createTask() {
     form.duration_days = 1
 
     await fetchTasks()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create task.'
   }
 }
@@ -215,7 +215,7 @@ async function fetchTags() {
     })
 
     tags.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load tags.'
   }
 }
@@ -227,7 +227,7 @@ async function fetchTaskTags() {
     })
 
     taskTags.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load task tags.'
   }
 }
@@ -248,7 +248,7 @@ async function createTag() {
 
     newTagName.value = ''
     await fetchTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create tag.'
   }
 }
@@ -283,7 +283,7 @@ async function assignTagToTask(taskId) {
 
     selectedTags[taskId] = ''
     await fetchTaskTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not assign tag to task.'
   }
 }
@@ -297,7 +297,7 @@ async function removeTagFromTask(taskTagId) {
     })
 
     await fetchTaskTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not remove tag from task.'
   }
 }

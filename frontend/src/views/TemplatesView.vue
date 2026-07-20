@@ -130,7 +130,7 @@ async function deleteTemplate(templateId) {
     })
 
     await fetchTemplates()
-  } catch (err) {
+  } catch {
     error.value = 'Could not delete template.'
   }
 }
@@ -146,7 +146,7 @@ async function fetchTemplates() {
     })
 
     templates.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load templates.'
   } finally {
     loading.value = false
@@ -166,7 +166,7 @@ async function createTemplate() {
     form.is_public = false
 
     await fetchTemplates()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create template.'
   }
 }
@@ -180,7 +180,7 @@ async function duplicateTemplate(templateId) {
     })
 
     await fetchTemplates()
-  } catch (err) {
+  } catch {
     error.value = 'Could not duplicate template.'
   }
 }
@@ -206,7 +206,7 @@ async function viewVersions(templateId) {
     alert(
       versions || 'No versions found.'
     )
-  } catch (err) {
+  } catch {
     error.value = 'Could not load template versions.'
   }
 }
@@ -230,7 +230,7 @@ async function shareTemplate(templateId) {
     )
 
     alert('Template shared successfully.')
-  } catch (err) {
+  } catch {
     error.value = 'Could not share template. Check that the username exists.'
   }
 }
@@ -269,7 +269,7 @@ async function updateTemplate(template) {
 
     alert('New template version created successfully.')
     await fetchTemplates()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create new template version.'
   }
 }

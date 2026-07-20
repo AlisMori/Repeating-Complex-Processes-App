@@ -34,3 +34,33 @@ class AuthSession(models.Model):
 
     def __str__(self):
         return f"{self.user.username}:{self.session_id}"
+
+
+class ShareNotification(models.Model):
+    notification_id = models.AutoField(primary_key=True)
+    recipient = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="share_notifications",
+    )
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="sent_share_notifications",
+    )
+    template = models.ForeignKey(
+        "templates_mgmt.Template",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="share_notifications",
+    )
+    template_name = models.CharField(max_length=100)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.sender.username} -> {self.recipient.username}: {self.template_name}"

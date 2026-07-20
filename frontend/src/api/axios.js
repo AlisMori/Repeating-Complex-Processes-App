@@ -1,6 +1,14 @@
 import axios from 'axios'
 
-const DEFAULT_BASE_URL = 'http://127.0.0.1:8000/api'
+function normalizeBaseUrl(baseUrl) {
+  if (!baseUrl) {
+    return '/api'
+  }
+
+  return baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+}
+
+const DEFAULT_BASE_URL = normalizeBaseUrl(import.meta.env?.VITE_API_BASE_URL)
 const INACTIVE_SESSION_MESSAGE = 'Your session expired after 30 minutes of inactivity. Please log in again.'
 const GENERIC_SESSION_MESSAGE = 'Your session has expired. Please log in again.'
 
@@ -21,14 +29,15 @@ export function createApiClient({
   transportAdapter,
   refreshAdapter,
 } = {}) {
+  const resolvedBaseUrl = normalizeBaseUrl(baseURL)
   const api = axios.create({
-    baseURL,
+    baseURL: resolvedBaseUrl,
     withCredentials,
     adapter: transportAdapter,
   })
 
   const refreshClient = axios.create({
-    baseURL,
+    baseURL: resolvedBaseUrl,
     withCredentials,
     adapter: refreshAdapter || transportAdapter,
   })

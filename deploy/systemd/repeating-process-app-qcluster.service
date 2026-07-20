@@ -1,0 +1,23 @@
+[Unit]
+Description=Repeating Process App django-q2 cluster
+After=network.target postgresql.service repeating-process-app-gunicorn.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=<app-user>
+Group=<app-group>
+WorkingDirectory=/srv/repeating-process-app/current/backend
+EnvironmentFile=/etc/repeating-process-app/backend.env
+ExecStart=/srv/repeating-process-app/current/backend/.venv/bin/python manage.py qcluster
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

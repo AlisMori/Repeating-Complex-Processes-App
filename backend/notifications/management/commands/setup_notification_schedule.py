@@ -4,7 +4,7 @@ from notifications.scheduler import register_scheduler
 
 
 class Command(BaseCommand):
-    help = "Registers notifications.tasks.check_notifications to run daily via django-q2."
+    help = "Registers notifications.tasks.check_notifications to run every 5 minutes via django-q2."
 
     def handle(self, *args, **options):
         schedule, created = register_scheduler()

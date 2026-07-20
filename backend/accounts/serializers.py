@@ -16,7 +16,7 @@ from .auth_sessions import (
     serialize_session_window,
 )
 from .forms import SafeMessageIdPasswordResetForm
-from .models import AuthSession
+from .models import AuthSession, ShareNotification
 from .password_reset import (
     PASSWORD_RESET_TOKEN_STATUS_EXPIRED,
     PASSWORD_RESET_TOKEN_STATUS_VALID,
@@ -40,12 +40,108 @@ class UserSerializer(serializers.ModelSerializer):
             "notification_opt_in",
             "created_at",
         ]
+        read_only_fields = ["id", "username", "created_at"]
+
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(required=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "email",
+            "first_name",
+            "last_name",
+            "notification_opt_in",
+        ]
+
+    def validate_email(self, value):
+        normalized_email = value.strip().lower()
+        existing = User.objects.filter(email__iexact=normalized_email).exclude(pk=self.instance.pk)
+        if existing.exists():
+            raise serializers.ValidationError("A user with that email already exists.")
+        return normalized_email
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    default_error_messages = {
+        "current_password_incorrect": "Current password is incorrect.",
+    }
+
+    def validate_current_password(self, value):
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise serializers.ValidationError(self.error_messages["current_password_incorrect"])
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context["request"].user
+        try:
+            validate_password(value, user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+    def validate(self, attrs):
+        if attrs["current_password"] == attrs["new_password"]:
+            raise serializers.ValidationError(
+                {"new_password": ["New password must be different from the current password."]}
+            )
+        return attrs
+
+    def save(self):
+        user = self.context["request"].user
+        user.set_password(self.validated_data["new_password"])
+        user.save(update_fields=["password"])
+        return user
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    confirmation_text = serializers.CharField(write_only=True)
+
+    default_error_messages = {
+        "confirmation_mismatch": "Type DELETE to confirm account deletion.",
+    }
+
+    def validate_confirmation_text(self, value):
+        if value.strip() != "DELETE":
+            raise serializers.ValidationError(self.error_messages["confirmation_mismatch"])
+        return value
+
+    def save(self):
+        user = self.context["request"].user
+        user.delete()
 
 
 class LoginUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "email"]
+
+
+class UserLookupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username"]
+
+
+class ShareNotificationSerializer(serializers.ModelSerializer):
+    sender_username = serializers.CharField(source="sender.username", read_only=True)
+
+    class Meta:
+        model = ShareNotification
+        fields = [
+            "notification_id",
+            "sender_username",
+            "template_name",
+            "template",
+            "is_read",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class RegisterSerializer(serializers.ModelSerializer):

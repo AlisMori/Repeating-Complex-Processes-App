@@ -1,0 +1,13 @@
+Hello,
+
+{{ intro }}
+
+{{ detail }}
+
+Open the cycle using the link below:
+
+{{ cycle_url }}
+
+If you are already taking care of this, no further action is needed.
+
+Recurra Team
