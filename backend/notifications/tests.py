@@ -1,6 +1,7 @@
 from django.apps import apps as global_apps
 from django.test import TestCase
 from django.core import mail
+from django.utils import timezone
 from django_q.models import Schedule
 
 from notifications.scheduler import register_scheduler, register_scheduler_on_migrate
@@ -43,7 +44,7 @@ class NotificationSchedulerRegistrationTests(TestCase):
 
 class NotificationsTest(TestCase):
     def setUp(self):
-        self.today = datetime.date.today()
+        self.today = timezone.localdate()
         # 1. Set Up Users
         # Create a user who wants notifications
         self.user = User.objects.create(

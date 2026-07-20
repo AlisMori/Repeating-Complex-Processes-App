@@ -14,7 +14,7 @@ from .services import (
 
 def check_notifications():
     # Use unified timezone
-    today = timezone.now().date()
+    today = timezone.localdate()
 
     # Users who want to receive notifications would get them
     users = User.objects.filter(

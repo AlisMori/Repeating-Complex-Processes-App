@@ -571,7 +571,7 @@ function buildGantt(taskList, actList, depByLocalId = {}) {
 
   // Topological-ish sort for display — independent tasks first,
   // then tasks that depend on them, so the timeline reads top-down.
-  const sorted = [...taskList.map((t, i) => ({ ...t, _origIdx: i }))]
+  const sorted = taskList.map((t, i) => ({ ...t, _origIdx: i }))
   sorted.sort((a, b) => {
     const aHasDep = edges[a._origIdx] !== undefined
     const bHasDep = edges[b._origIdx] !== undefined
