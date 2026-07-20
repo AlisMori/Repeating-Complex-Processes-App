@@ -480,9 +480,17 @@ async function saveNote() {
   noteLoading.value = true
   try {
     if (!text.trim()) {
-      kind === 'task' ? await clearTaskNote(id) : await clearActivityNote(id)
+      if (kind === 'task') {
+        await clearTaskNote(id)
+      } else {
+        await clearActivityNote(id)
+      }
     } else {
-      kind === 'task' ? await setTaskNote(id, text.trim()) : await setActivityNote(id, text.trim())
+      if (kind === 'task') {
+        await setTaskNote(id, text.trim())
+      } else {
+        await setActivityNote(id, text.trim())
+      }
     }
     noteModal.value.open = false
     await loadCycle()

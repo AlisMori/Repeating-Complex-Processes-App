@@ -140,7 +140,7 @@ async function runSearch() {
       context: props.context,
       scopes: effectiveScopes.value.length ? effectiveScopes.value.join(',') : undefined,
     })
-  } catch (err) {
+  } catch {
     results.value = null
     error.value = 'Search failed. Please try again.'
   } finally {

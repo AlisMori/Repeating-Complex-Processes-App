@@ -276,9 +276,17 @@ async function saveNote() {
   try {
     const id = kind === 'task' ? item.template_task_id : item.template_activity_id
     if (!text.trim()) {
-      kind === 'task' ? await clearTemplateTaskNote(id) : await clearTemplateActivityNote(id)
+      if (kind === 'task') {
+        await clearTemplateTaskNote(id)
+      } else {
+        await clearTemplateActivityNote(id)
+      }
     } else {
-      kind === 'task' ? await setTemplateTaskNote(id, text.trim()) : await setTemplateActivityNote(id, text.trim())
+      if (kind === 'task') {
+        await setTemplateTaskNote(id, text.trim())
+      } else {
+        await setTemplateActivityNote(id, text.trim())
+      }
     }
     noteModal.value.open = false
     await loadTemplate()

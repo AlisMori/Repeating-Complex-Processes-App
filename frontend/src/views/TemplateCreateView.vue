@@ -26,7 +26,6 @@ const router = useRouter()
 
 const isEditMode = computed(() => !!route.params.id)
 const templateId = computed(() => route.params.id || null)
-const pageTitle = computed(() => isEditMode.value ? 'Edit Template' : 'New Template')
 
 // ── STEP TRACKING ─────────────────────────────────────────
 const step = ref(1)
@@ -155,7 +154,7 @@ async function loadExistingTemplate() {
       }
     }
     dependencies.value = seededDependencies
-  } catch (e) {
+  } catch {
     step1Error.value = 'Failed to load template data.'
   } finally {
     loadingInitial.value = false

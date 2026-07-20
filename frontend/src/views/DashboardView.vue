@@ -48,7 +48,7 @@ async function loadDashboard() {
     const activityMap = {}
     for (const { cycleId, activities } of activityResults) activityMap[cycleId] = activities
     cycleActivitiesMap.value = activityMap
-  } catch (e) {
+  } catch {
     error.value = 'Failed to load dashboard data.'
   } finally {
     loading.value = false

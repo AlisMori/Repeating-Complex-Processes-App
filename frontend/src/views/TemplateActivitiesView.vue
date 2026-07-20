@@ -167,7 +167,7 @@ async function fetchTemplates() {
     })
 
     templates.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load templates.'
   }
 }
@@ -182,7 +182,7 @@ async function fetchActivities() {
     })
 
     activities.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load activities.'
   } finally {
     loading.value = false
@@ -203,7 +203,7 @@ async function createActivity() {
     form.end_offset_days = 1
 
     await fetchActivities()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create activity.'
   }
 }
@@ -215,7 +215,7 @@ async function fetchTags() {
     })
 
     tags.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load tags.'
   }
 }
@@ -227,7 +227,7 @@ async function fetchActivityTags() {
     })
 
     activityTags.value = response.data
-  } catch (err) {
+  } catch {
     error.value = 'Could not load activity tags.'
   }
 }
@@ -248,7 +248,7 @@ async function createTag() {
 
     newTagName.value = ''
     await fetchTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not create tag.'
   }
 }
@@ -283,7 +283,7 @@ async function assignTagToActivity(activityId) {
 
     selectedTags[activityId] = ''
     await fetchActivityTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not assign tag to activity.'
   }
 }
@@ -297,7 +297,7 @@ async function removeTagFromActivity(activityTagId) {
     })
 
     await fetchActivityTags()
-  } catch (err) {
+  } catch {
     error.value = 'Could not remove tag from activity.'
   }
 }
