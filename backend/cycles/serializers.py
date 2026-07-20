@@ -62,6 +62,7 @@ class CycleTaskSerializer(serializers.ModelSerializer):
             "is_mandatory",
             "is_fixed_date",
             "reminder_lead_days",
+            "notification_opt_in",
             "note_text",
         ]
 

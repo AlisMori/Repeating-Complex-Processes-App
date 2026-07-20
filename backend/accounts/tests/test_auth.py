@@ -17,6 +17,8 @@ from rest_framework_simplejwt.tokens import AccessToken
 
 from accounts.forms import format_password_reset_expiry
 from accounts.models import AuthSession
+from cycles.models import CycleInstance
+from templates_mgmt.models import Template
 
 
 User = get_user_model()
@@ -210,6 +212,136 @@ class AuthApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], "alice")
+
+    def test_me_patch_updates_profile_fields(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {
+                "first_name": "Alice",
+                "last_name": "Ng",
+                "email": "alice.ng@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Alice")
+        self.assertEqual(self.user.last_name, "Ng")
+        self.assertEqual(self.user.email, "alice.ng@example.com")
+
+    def test_me_patch_rejects_duplicate_email(self):
+        User.objects.create_user(
+            username="bob",
+            email="bob@example.com",
+            password="StrongPass456!",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {"email": "BOB@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["email"], ["A user with that email already exists."])
+
+    def test_change_password_updates_hashed_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "StrongPass123!",
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("EvenStronger123!"))
+        self.assertNotEqual(self.user.password, "EvenStronger123!")
+
+    def test_change_password_rejects_wrong_current_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "WrongPass123!",
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["current_password"], ["Current password is incorrect."])
+
+    def test_change_password_rejects_weak_new_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "StrongPass123!",
+                "new_password": "123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+
+    def test_delete_account_deletes_user_and_owned_records(self):
+        template = Template.objects.create(user=self.user, template_name="Owned Template")
+        CycleInstance.objects.create(
+            user=self.user,
+            template=template,
+            cycle_name="Owned Cycle",
+            start_date=timezone.localdate(),
+            status="running",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-delete-account"),
+            {
+                "confirmation_text": "DELETE",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(User.objects.filter(pk=self.user.pk).exists())
+        self.assertEqual(CycleInstance.objects.count(), 0)
+
+    def test_delete_account_rejects_wrong_confirmation_text(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-delete-account"),
+            {
+                "confirmation_text": "delete",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["confirmation_text"],
+            ["Type DELETE to confirm account deletion."],
+        )
 
     def test_me_rejects_invalid_jwt(self):
         token = AccessToken.for_user(self.user)

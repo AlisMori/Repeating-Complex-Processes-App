@@ -43,6 +43,18 @@ export function fetchMe(accessToken) {
   })
 }
 
+export function updateMe(payload) {
+  return api.patch('/auth/me/', payload, { requiresAuth: true })
+}
+
+export function changePassword(payload) {
+  return api.post('/auth/change-password/', payload, { requiresAuth: true })
+}
+
+export function deleteAccount(payload) {
+  return api.post('/auth/delete-account/', payload, { requiresAuth: true })
+}
+
 export function reportActivity() {
   return api.post(
     '/auth/activity/',

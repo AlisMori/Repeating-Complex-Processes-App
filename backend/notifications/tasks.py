@@ -48,6 +48,9 @@ def check_notifications(today=None):
 
 
 def check_reminder(user, cycle, task, today):
+    if not task.notification_opt_in:
+        return
+
     # Ensure reminders are set and present
     if not task.reminder_lead_days:
         return
@@ -77,6 +80,9 @@ def check_reminder(user, cycle, task, today):
 
 
 def check_overdue(user, cycle, task, today):
+    if not task.notification_opt_in:
+        return
+
     # Don't notify about tasks that are completed
     if task.status == "completed":
         return

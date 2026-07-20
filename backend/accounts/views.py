@@ -16,14 +16,17 @@ from .auth_sessions import (
     touch_authenticated_session,
 )
 from .serializers import (
+    DeleteAccountSerializer,
     LoginSerializer,
     LoginUserSerializer,
     LogoutSerializer,
+    PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
     SlidingTokenRefreshSerializer,
     UserSerializer,
+    UserProfileUpdateSerializer,
 )
 
 
@@ -95,7 +98,7 @@ class MeView(APIView):
         )
 
     def patch(self, request):
-        serializer = UserSerializer(
+        serializer = UserProfileUpdateSerializer(
             request.user,
             data=request.data,
             partial=True,
@@ -104,7 +107,37 @@ class MeView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        return Response(
+            {"message": "Password updated successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class DeleteAccountView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = DeleteAccountSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        return Response(
+            {"message": "Account deleted successfully."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class ActivityView(APIView):

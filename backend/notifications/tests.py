@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.apps import apps as global_apps
+from django.conf import settings
 from django.core import mail
 from django.core.management import call_command
 from django.test import TestCase, override_settings
@@ -81,6 +82,7 @@ class NotificationDeliveryTests(TestCase):
         end_delta_days=1,
         reminders=None,
         status="pending",
+        notification_opt_in=True,
     ):
         return CycleTask.objects.create(
             cycle=self.cycle,
@@ -90,6 +92,7 @@ class NotificationDeliveryTests(TestCase):
             calculated_end_date=self.today + timedelta(days=end_delta_days),
             reminder_lead_days=reminders,
             status=status,
+            notification_opt_in=notification_opt_in,
         )
 
     def test_successful_delivery_is_persisted_once(self):
@@ -187,6 +190,25 @@ class NotificationDeliveryTests(TestCase):
         self.assertEqual(len(mail.outbox), 0)
         self.assertEqual(NotificationDelivery.objects.count(), 0)
 
+    def test_item_level_notification_opt_out_skips_delivery(self):
+        self._make_task(reminders=[0], notification_opt_in=False)
+
+        check_notifications(today=self.today)
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(NotificationDelivery.objects.count(), 0)
+
+    def test_item_level_notification_opt_in_still_allows_delivery(self):
+        task = self._make_task(reminders=[0], notification_opt_in=True)
+
+        check_notifications(today=self.today)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(
+            NotificationDelivery.objects.get(task=task, notification_key="reminder:0").status,
+            NotificationDelivery.STATUS_SENT,
+        )
+
     def test_tests_use_locmem_backend_and_send_no_real_emails(self):
         task = self._make_task(reminders=[0])
 
@@ -194,6 +216,38 @@ class NotificationDeliveryTests(TestCase):
 
         self.assertEqual(mail.outbox[0].to, ["notify@example.com"])
         self.assertEqual(NotificationDelivery.objects.get(task=task, notification_key="reminder:0").status, "sent")
+
+    def test_reminder_email_uses_branded_multipart_template_and_subject_prefix(self):
+        self._make_task(reminders=[0])
+
+        check_notifications(today=self.today)
+
+        email = mail.outbox[0]
+        self.assertEqual(email.subject, "Recurra - Reminder: Reminder Task")
+        self.assertNotRegex(email.body, r"<[^>]+>")
+        self.assertEqual(len(email.alternatives), 1)
+        html_body, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, "text/html")
+        self.assertIn(">Open Cycle<", html_body)
+        self.assertIn(f"/cycles/{self.cycle.cycle_id}", email.body)
+        self.assertIn(f'href="{settings.FRONTEND_URL}/cycles/{self.cycle.cycle_id}"', html_body)
+
+    def test_overdue_email_uses_branded_multipart_template_and_subject_prefix(self):
+        self._make_task(
+            task_name="Late Task",
+            start_delta_days=-4,
+            end_delta_days=-1,
+        )
+
+        check_notifications(today=self.today)
+
+        email = mail.outbox[0]
+        self.assertEqual(email.subject, "Recurra - Task overdue: Late Task")
+        self.assertNotRegex(email.body, r"<[^>]+>")
+        self.assertEqual(len(email.alternatives), 1)
+        html_body, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, "text/html")
+        self.assertIn(">Review Task<", html_body)
 
     def test_management_command_registers_five_minute_schedule(self):
         call_command("setup_notification_schedule")
