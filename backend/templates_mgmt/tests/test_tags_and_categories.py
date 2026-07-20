@@ -182,6 +182,326 @@ class TagApiTests(APITestCase):
         self.assertTrue(TemplateTaskTag.objects.filter(template_task=task, tag=important).exists())
 
 
+class TagAssignmentSecurityTests(APITestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="tag_assign_owner", password="Test12345!")
+        self.other_user = User.objects.create_user(username="tag_assign_other", password="Test12345!")
+        self.client.force_authenticate(user=self.owner)
+
+        self.owner_template = Template.objects.create(user=self.owner, template_name="Owner Template")
+        self.owner_task = TemplateTask.objects.create(
+            template=self.owner_template, task_name="Owner Task", day_offset=0
+        )
+        self.owner_activity = TemplateActivity.objects.create(
+            template=self.owner_template,
+            activity_name="Owner Activity",
+            start_offset_days=0,
+            end_offset_days=5,
+        )
+        self.owner_tag = Tag.objects.create(user=self.owner, tag_name="Owner Tag")
+
+        self.other_template = Template.objects.create(user=self.other_user, template_name="Other Template")
+        self.other_task = TemplateTask.objects.create(
+            template=self.other_template, task_name="Other Task", day_offset=1
+        )
+        self.other_activity = TemplateActivity.objects.create(
+            template=self.other_template,
+            activity_name="Other Activity",
+            start_offset_days=1,
+            end_offset_days=6,
+        )
+        self.other_tag = Tag.objects.create(user=self.other_user, tag_name="Other Tag")
+
+    def test_owner_can_crud_task_tag_assignment(self):
+        create_response = self.client.post(
+            "/api/template-task-tags/",
+            {"template_task": self.owner_task.template_task_id, "tag": self.owner_tag.tag_id},
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        assignment_id = create_response.data["template_task_tag_id"]
+
+        list_response = self.client.get("/api/template-task-tags/")
+        retrieve_response = self.client.get(f"/api/template-task-tags/{assignment_id}/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(retrieve_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(retrieve_response.data["tag"], self.owner_tag.tag_id)
+
+        new_tag = Tag.objects.create(user=self.owner, tag_name="Renamed Owner Tag")
+        update_response = self.client.patch(
+            f"/api/template-task-tags/{assignment_id}/",
+            {"tag": new_tag.tag_id},
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data["tag"], new_tag.tag_id)
+
+        delete_response = self.client.delete(f"/api/template-task-tags/{assignment_id}/")
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(TemplateTaskTag.objects.filter(pk=assignment_id).exists())
+
+    def test_owner_can_crud_activity_tag_assignment(self):
+        create_response = self.client.post(
+            "/api/template-activity-tags/",
+            {
+                "template_activity": self.owner_activity.template_activity_id,
+                "tag": self.owner_tag.tag_id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        assignment_id = create_response.data["template_activity_tag_id"]
+
+        list_response = self.client.get("/api/template-activity-tags/")
+        retrieve_response = self.client.get(f"/api/template-activity-tags/{assignment_id}/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(retrieve_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(retrieve_response.data["tag"], self.owner_tag.tag_id)
+
+        new_tag = Tag.objects.create(user=self.owner, tag_name="Second Owner Activity Tag")
+        update_response = self.client.patch(
+            f"/api/template-activity-tags/{assignment_id}/",
+            {"tag": new_tag.tag_id},
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data["tag"], new_tag.tag_id)
+
+        delete_response = self.client.delete(f"/api/template-activity-tags/{assignment_id}/")
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(TemplateActivityTag.objects.filter(pk=assignment_id).exists())
+
+    def test_unauthenticated_access_is_rejected_for_tag_endpoints(self):
+        self.client.force_authenticate(user=None)
+
+        endpoints = [
+            ("get", "/api/tags/"),
+            ("post", "/api/tags/", {"tag_name": "Blocked"}),
+            ("get", "/api/template-task-tags/"),
+            ("post", "/api/template-task-tags/", {"template_task": self.owner_task.pk, "tag": self.owner_tag.pk}),
+            ("get", "/api/template-activity-tags/"),
+            (
+                "post",
+                "/api/template-activity-tags/",
+                {"template_activity": self.owner_activity.pk, "tag": self.owner_tag.pk},
+            ),
+        ]
+
+        for method, path, *payload in endpoints:
+            response = getattr(self.client, method)(path, *(payload or []), format="json")
+            self.assertIn(
+                response.status_code,
+                (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN),
+            )
+
+    def test_cross_user_listing_only_returns_owner_records(self):
+        TemplateTaskTag.objects.create(template_task=self.owner_task, tag=self.owner_tag)
+        TemplateTaskTag.objects.create(template_task=self.other_task, tag=self.other_tag)
+        TemplateActivityTag.objects.create(template_activity=self.owner_activity, tag=self.owner_tag)
+        TemplateActivityTag.objects.create(template_activity=self.other_activity, tag=self.other_tag)
+
+        task_list_response = self.client.get("/api/template-task-tags/")
+        activity_list_response = self.client.get("/api/template-activity-tags/")
+        tags_response = self.client.get("/api/tags/")
+
+        self.assertEqual(task_list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["template_task"] for row in task_list_response.data], [self.owner_task.pk])
+        self.assertEqual(activity_list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [row["template_activity"] for row in activity_list_response.data],
+            [self.owner_activity.pk],
+        )
+        self.assertEqual(tags_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["tag_id"] for row in tags_response.data], [self.owner_tag.pk])
+
+    def test_cross_user_retrieve_update_delete_returns_404(self):
+        other_task_assignment = TemplateTaskTag.objects.create(
+            template_task=self.other_task, tag=self.other_tag
+        )
+        other_activity_assignment = TemplateActivityTag.objects.create(
+            template_activity=self.other_activity, tag=self.other_tag
+        )
+
+        self.assertEqual(
+            self.client.get(f"/api/tags/{self.other_tag.tag_id}/").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/template-task-tags/{other_task_assignment.template_task_tag_id}/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.patch(
+                f"/api/template-task-tags/{other_task_assignment.template_task_tag_id}/",
+                {"tag": self.owner_tag.tag_id},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.delete(
+                f"/api/template-task-tags/{other_task_assignment.template_task_tag_id}/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        self.assertEqual(
+            self.client.get(
+                f"/api/template-activity-tags/{other_activity_assignment.template_activity_tag_id}/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.patch(
+                f"/api/template-activity-tags/{other_activity_assignment.template_activity_tag_id}/",
+                {"tag": self.owner_tag.tag_id},
+                format="json",
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertEqual(
+            self.client.delete(
+                f"/api/template-activity-tags/{other_activity_assignment.template_activity_tag_id}/"
+            ).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_cannot_create_tag_assignment_against_another_users_object(self):
+        task_response = self.client.post(
+            "/api/template-task-tags/",
+            {"template_task": self.other_task.template_task_id, "tag": self.owner_tag.tag_id},
+            format="json",
+        )
+        activity_response = self.client.post(
+            "/api/template-activity-tags/",
+            {
+                "template_activity": self.other_activity.template_activity_id,
+                "tag": self.owner_tag.tag_id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(task_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(activity_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(TemplateTaskTag.objects.filter(template_task=self.other_task, tag=self.owner_tag).exists())
+        self.assertFalse(
+            TemplateActivityTag.objects.filter(
+                template_activity=self.other_activity, tag=self.owner_tag
+            ).exists()
+        )
+
+    def test_cannot_assign_another_users_tag_or_swap_assignment_to_it(self):
+        task_create_response = self.client.post(
+            "/api/template-task-tags/",
+            {"template_task": self.owner_task.template_task_id, "tag": self.other_tag.tag_id},
+            format="json",
+        )
+        activity_create_response = self.client.post(
+            "/api/template-activity-tags/",
+            {
+                "template_activity": self.owner_activity.template_activity_id,
+                "tag": self.other_tag.tag_id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(task_create_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(activity_create_response.status_code, status.HTTP_403_FORBIDDEN)
+
+        task_assignment = TemplateTaskTag.objects.create(
+            template_task=self.owner_task, tag=self.owner_tag
+        )
+        activity_assignment = TemplateActivityTag.objects.create(
+            template_activity=self.owner_activity, tag=self.owner_tag
+        )
+
+        task_update_response = self.client.patch(
+            f"/api/template-task-tags/{task_assignment.template_task_tag_id}/",
+            {"tag": self.other_tag.tag_id},
+            format="json",
+        )
+        activity_update_response = self.client.patch(
+            f"/api/template-activity-tags/{activity_assignment.template_activity_tag_id}/",
+            {"tag": self.other_tag.tag_id},
+            format="json",
+        )
+
+        self.assertEqual(task_update_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(activity_update_response.status_code, status.HTTP_403_FORBIDDEN)
+        task_assignment.refresh_from_db()
+        activity_assignment.refresh_from_db()
+        self.assertEqual(task_assignment.tag_id, self.owner_tag.tag_id)
+        self.assertEqual(activity_assignment.tag_id, self.owner_tag.tag_id)
+
+    def test_read_only_shared_template_keeps_tag_lists_visible_but_blocks_assignment_writes(self):
+        shared_template = Template.objects.create(
+            user=self.other_user, template_name="Shared Template", is_public=False
+        )
+        shared_task = TemplateTask.objects.create(
+            template=shared_template, task_name="Shared Task", day_offset=2
+        )
+        shared_activity = TemplateActivity.objects.create(
+            template=shared_template,
+            activity_name="Shared Activity",
+            start_offset_days=2,
+            end_offset_days=7,
+        )
+        shared_tag = Tag.objects.create(user=self.other_user, tag_name="Shared Tag")
+        shared_task_assignment = TemplateTaskTag.objects.create(
+            template_task=shared_task, tag=shared_tag
+        )
+        shared_activity_assignment = TemplateActivityTag.objects.create(
+            template_activity=shared_activity, tag=shared_tag
+        )
+        from templates_mgmt.models import UserTemplate
+
+        UserTemplate.objects.create(user=self.owner, template=shared_template, access_type="shared")
+
+        task_list_response = self.client.get("/api/template-task-tags/")
+        activity_list_response = self.client.get("/api/template-activity-tags/")
+        task_detail_response = self.client.get(
+            f"/api/template-task-tags/{shared_task_assignment.template_task_tag_id}/"
+        )
+        activity_detail_response = self.client.get(
+            f"/api/template-activity-tags/{shared_activity_assignment.template_activity_tag_id}/"
+        )
+
+        self.assertEqual(task_list_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            any(row["template_task"] == shared_task.pk for row in task_list_response.data)
+        )
+        self.assertEqual(activity_list_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(
+            any(row["template_activity"] == shared_activity.pk for row in activity_list_response.data)
+        )
+        self.assertEqual(task_detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(activity_detail_response.status_code, status.HTTP_200_OK)
+
+        create_task_response = self.client.post(
+            "/api/template-task-tags/",
+            {"template_task": shared_task.pk, "tag": self.owner_tag.pk},
+            format="json",
+        )
+        create_activity_response = self.client.post(
+            "/api/template-activity-tags/",
+            {"template_activity": shared_activity.pk, "tag": self.owner_tag.pk},
+            format="json",
+        )
+
+        self.assertEqual(create_task_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(create_activity_response.status_code, status.HTTP_403_FORBIDDEN)
+
+
 class TemplateCategoryApiTests(APITestCase):
     """Covers TemplateCategoryViewSet: create, rename-in-place, delete
     blocked while any template uses it, and that it survives template

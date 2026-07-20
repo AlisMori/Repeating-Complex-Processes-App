@@ -869,19 +869,23 @@ class TemplateCategoryViewSet(viewsets.ModelViewSet):
 
 class TemplateTaskTagViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskTagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
 
     def get_queryset(self):
         return TemplateTaskTag.objects.filter(
-            template_task__template__user=self.request.user
-        )
+            template_task__template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).select_related("template_task__template", "tag").distinct()
 
 
 class TemplateActivityTagViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivityTagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
 
     def get_queryset(self):
         return TemplateActivityTag.objects.filter(
-            template_activity__template__user=self.request.user
-        )
+            template_activity__template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).select_related("template_activity__template", "tag").distinct()

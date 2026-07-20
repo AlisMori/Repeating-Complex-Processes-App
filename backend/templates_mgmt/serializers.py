@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
-from core.permissions import user_can_edit_template
+from core.permissions import user_can_access_template, user_can_edit_template
 from .models import (
     Template,
     TemplateCategory,
@@ -160,6 +160,41 @@ class TemplateActivitySerializer(serializers.ModelSerializer):
 
 
 class TemplateTaskTagSerializer(serializers.ModelSerializer):
+    def validate_template_task(self, value):
+        request = self.context.get("request")
+        if request is None or not user_can_edit_template(request.user, value.template):
+            raise PermissionDenied(
+                "You do not have permission to tag this task."
+            )
+        return value
+
+    def validate_tag(self, value):
+        request = self.context.get("request")
+        if request is None or value.user_id != request.user.id:
+            raise PermissionDenied(
+                "You do not have permission to use this tag."
+            )
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        template_task = attrs.get("template_task") or getattr(self.instance, "template_task", None)
+        tag = attrs.get("tag") or getattr(self.instance, "tag", None)
+
+        if request is None:
+            raise PermissionDenied("Authentication credentials were not provided.")
+
+        if template_task is not None and not user_can_access_template(request.user, template_task.template):
+            raise PermissionDenied("You do not have permission to access this task.")
+
+        if template_task is not None and not user_can_edit_template(request.user, template_task.template):
+            raise PermissionDenied("You do not have permission to tag this task.")
+
+        if tag is not None and tag.user_id != request.user.id:
+            raise PermissionDenied("You do not have permission to use this tag.")
+
+        return attrs
+
     class Meta:
         model = TemplateTaskTag
         fields = "__all__"
@@ -167,6 +202,47 @@ class TemplateTaskTagSerializer(serializers.ModelSerializer):
 
 
 class TemplateActivityTagSerializer(serializers.ModelSerializer):
+    def validate_template_activity(self, value):
+        request = self.context.get("request")
+        if request is None or not user_can_edit_template(request.user, value.template):
+            raise PermissionDenied(
+                "You do not have permission to tag this activity."
+            )
+        return value
+
+    def validate_tag(self, value):
+        request = self.context.get("request")
+        if request is None or value.user_id != request.user.id:
+            raise PermissionDenied(
+                "You do not have permission to use this tag."
+            )
+        return value
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        template_activity = attrs.get("template_activity") or getattr(
+            self.instance, "template_activity", None
+        )
+        tag = attrs.get("tag") or getattr(self.instance, "tag", None)
+
+        if request is None:
+            raise PermissionDenied("Authentication credentials were not provided.")
+
+        if template_activity is not None and not user_can_access_template(
+            request.user, template_activity.template
+        ):
+            raise PermissionDenied("You do not have permission to access this activity.")
+
+        if template_activity is not None and not user_can_edit_template(
+            request.user, template_activity.template
+        ):
+            raise PermissionDenied("You do not have permission to tag this activity.")
+
+        if tag is not None and tag.user_id != request.user.id:
+            raise PermissionDenied("You do not have permission to use this tag.")
+
+        return attrs
+
     class Meta:
         model = TemplateActivityTag
         fields = "__all__"
