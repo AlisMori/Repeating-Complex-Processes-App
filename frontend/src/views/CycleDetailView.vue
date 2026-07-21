@@ -7,12 +7,13 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseDatePicker from '@/components/ui/BaseDatePicker.vue'
 import CycleGanttChart from '@/components/CycleGanttChart.vue'
 import { useToastStore } from '@/stores/toast'
 import {
   getCycle, getCycleTasks, getCycleActivities,
-  shutdownCycle,
+  shutdownCycle, completeCycle,
   updateCycleTask, previewTaskShift, applyTaskShift,
   updateTaskNotificationPreference,
   setTaskNote, clearTaskNote,
@@ -31,6 +32,12 @@ const toast = useToastStore()
 
 const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
+const completeCycleModal = ref(false)
+const completeCycleLoading = ref(false)
+const lastTaskModal = ref({ open: false, taskId: null, newStatus: null })
+const lastTaskLoading = ref(false)
+
+
 
 // Overflow "⋯" menu shown per row for secondary actions (note,
 // reschedule, edit dates) — only one open at a time, closes on any
@@ -146,6 +153,9 @@ const pendingTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.s
 const inProgressTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.status === 'in_progress'))
 const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed'))
 const skippedTasks = computed(() => tasks.value.filter(t => t.status === 'skipped'))
+const allTasksResolved = computed(() => (
+  tasks.value.length > 0 && tasks.value.every(t => ['completed', 'skipped'].includes(t.status))
+))
 
 const progress = computed(() => {
   if (tasks.value.length === 0) return 0
@@ -297,14 +307,18 @@ function toggleActivityExpanded(activity) {
 }
 
 async function updateTaskStatus(taskId, newStatus) {
+  const closesLastOpenTask = newStatus === 'completed' && tasks.value.every(task => (
+    task.cycle_task_id === taskId || ['completed', 'skipped'].includes(task.status)
+  ))
+  if (cycle.value?.status === 'running' && closesLastOpenTask) {
+    lastTaskModal.value = { open: true, taskId, newStatus }
+    return
+  }
+
   try {
-    const { data } = await updateCycleTask(taskId, newStatus)
+    await updateCycleTask(taskId, newStatus)
     await loadCycle()
-    if (data.cycle_just_completed) {
-      toast.success('Last task of the cycle completed/skipped — cycle shut down.')
-    } else {
-      toast.success('Task status updated.')
-    }
+    toast.success('Task status updated.')
   } catch (e) {
     if (isPrerequisitesUnresolvedError(e)) {
       prereqModal.value = {
@@ -321,6 +335,48 @@ async function updateTaskStatus(taskId, newStatus) {
       return
     }
     toast.error(getErrorMessage(e, 'Failed to update task status.'))
+  }
+}
+
+async function finishLastTask(completeCycleToo) {
+  const { taskId, newStatus } = lastTaskModal.value
+  lastTaskLoading.value = true
+  try {
+    await updateCycleTask(taskId, newStatus)
+    if (completeCycleToo) {
+      await completeCycle(cycleId)
+      toast.success('Task and cycle completed.')
+    } else {
+      toast.success('Task completed. The cycle remains active until you complete it.')
+    }
+    lastTaskModal.value.open = false
+    await loadCycle()
+  } catch (e) {
+    if (isPrerequisitesUnresolvedError(e)) {
+      lastTaskModal.value.open = false
+      prereqModal.value = {
+        open: true, taskId, newStatus,
+        unresolved: getUnresolvedPrerequisites(e), choices: {},
+      }
+      return
+    }
+    toast.error(getErrorMessage(e, 'Failed to complete the task.'))
+  } finally {
+    lastTaskLoading.value = false
+  }
+}
+
+async function confirmCompleteCycle() {
+  completeCycleLoading.value = true
+  try {
+    await completeCycle(cycleId)
+    completeCycleModal.value = false
+    await loadCycle()
+    toast.success('Cycle completed.')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to complete cycle.'))
+  } finally {
+    completeCycleLoading.value = false
   }
 }
 
@@ -685,6 +741,7 @@ onMounted(loadCycle)
       </div>
       <div v-if="cycle" style="margin-left: auto; display: flex; gap: 10px;">
         <BaseButton variant="secondary" size="sm" @click="router.push({ name: 'cycle-create' })">Start new cycle</BaseButton>
+        <BaseButton v-if="cycle.status === 'running' && allTasksResolved" variant="primary" size="sm" @click="completeCycleModal = true">Complete Cycle</BaseButton>
         <BaseButton v-if="cycle.status === 'running'" variant="danger" size="sm" @click="shutdownModal = true">Shut Down Cycle</BaseButton>
       </div>
     </template>
@@ -1035,6 +1092,29 @@ onMounted(loadCycle)
       <p>Are you sure you want to shut down this cycle? This cannot be undone.</p>
     </BaseModal>
 
+    <BaseModal
+      v-model="lastTaskModal.open"
+      title="Complete the final task?"
+      confirm-label="Yes, complete cycle"
+      cancel-label="No, keep cycle active"
+      :loading="lastTaskLoading"
+      @confirm="finishLastTask(true)"
+      @cancel="finishLastTask(false)"
+    >
+      <p>This is the last unfinished task. Do you want to complete this task and the cycle now? After completion, the cycle cannot be modified or returned to active.</p>
+    </BaseModal>
+
+    <BaseModal
+      v-model="completeCycleModal"
+      title="Complete cycle?"
+      confirm-label="Complete cycle"
+      confirm-variant="danger"
+      :loading="completeCycleLoading"
+      @confirm="confirmCompleteCycle"
+    >
+      <p>Completing this cycle is permanent. You will not be able to return it to active or change its tasks.</p>
+    </BaseModal>
+
     <!-- RESCHEDULE (SHIFT) MODAL -->
     <BaseModal
       v-model="shiftModal.open"
@@ -1142,7 +1222,7 @@ onMounted(loadCycle)
       <div v-for="t in prereqModal.unresolved" :key="t.cycle_task_id" class="prereq-row">
         <span class="prereq-name">{{ t.task_name }}</span>
         <BaseSelect v-model="prereqModal.choices[t.cycle_task_id]">
-          <option :value="undefined" disabled>Choose...</option>
+          <option value="" disabled>Choose...</option>
           <option value="completed">Completed</option>
           <option value="skipped">Skipped</option>
         </BaseSelect>

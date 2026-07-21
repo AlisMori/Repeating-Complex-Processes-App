@@ -110,19 +110,16 @@ class UndoTransitionTests(APITestCase):
 
     def test_undo_still_blocked_once_cycle_is_no_longer_running(self):
         """
-        The guard against undoing a task that already auto-completed
-        the whole cycle isn't in ALLOWED_TRANSITIONS at all — it's
-        assert_cycle_is_running() elsewhere, which blocks ANY edit
-        once cycle.status != "running". self.cycle_task_a is the
-        only (mandatory) task in this cycle, so completing it should
-        auto-complete the cycle itself — then undoing it should be
-        rejected, not because completed->pending is disallowed (it
-        now IS allowed), but because the cycle itself is frozen.
+        Once the user explicitly confirms cycle completion, the cycle
+        is frozen and its completed task can no longer be undone.
         """
         complete_response = self._patch_status(self.cycle_task_a.cycle_task_id, "in_progress")
         self.assertEqual(complete_response.status_code, status.HTTP_200_OK)
         complete_response = self._patch_status(self.cycle_task_a.cycle_task_id, "completed")
         self.assertEqual(complete_response.status_code, status.HTTP_200_OK)
+
+        cycle_response = self.client.post(reverse("cycles-complete", args=[self.cycle.cycle_id]))
+        self.assertEqual(cycle_response.status_code, status.HTTP_200_OK)
 
         self.cycle.refresh_from_db()
         self.assertEqual(self.cycle.status, "completed")

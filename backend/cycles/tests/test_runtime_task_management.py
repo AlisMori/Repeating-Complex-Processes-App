@@ -202,12 +202,12 @@ class RuntimeTaskManagementTests(APITestCase):
         self.cycle_activity.refresh_from_db()
         self.assertEqual(self.cycle_activity.activity_name, "Orientation")
 
-    # Cycle auto-completion, mandatory tasks only, optional tasks don't block
+    # Explicit cycle completion: every task must be resolved first
 
     def test_cycle_stays_running_until_mandatory_task_completes(self):
         # B is optional, completing it alone must not complete the cycle,
-        # A (mandatory) is still pending. Goes through the API so
-        # perform_update -> maybe_complete_cycle actually runs.
+        # A (mandatory) is still pending. Going through the API also
+        # verifies that a normal task update never completes the cycle.
         url = reverse("cycle-tasks-detail", args=[self.cycle_task_b.cycle_task_id])
         self.client.patch(url, {"status": "in_progress"})
         response = self.client.patch(url, {"status": "completed"})
@@ -216,20 +216,33 @@ class RuntimeTaskManagementTests(APITestCase):
         self.cycle.refresh_from_db()
         self.assertEqual(self.cycle.status, "running")
 
-    def test_cycle_completes_once_mandatory_task_is_done_even_with_optional_pending(self):
+    def test_last_task_update_does_not_auto_complete_cycle(self):
         url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
         self.client.patch(url, {"status": "in_progress"})
         self.client.patch(url, {"status": "completed"})
 
         self.cycle.refresh_from_db()
-        self.assertEqual(self.cycle.status, "completed")
-        # B (optional) was never touched, mandatory-only is what mattered.
+        self.assertEqual(self.cycle.status, "running")
+
+    def test_cycle_completion_is_rejected_while_any_task_is_unresolved(self):
+        self.cycle_task_a.status = "completed"
+        self.cycle_task_a.save(update_fields=["status"])
+
+        response = self.client.post(reverse("cycles-complete", args=[self.cycle.cycle_id]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.cycle.refresh_from_db()
+        self.assertEqual(self.cycle.status, "running")
         self.cycle_task_b.refresh_from_db()
         self.assertEqual(self.cycle_task_b.status, "pending")
 
-    def test_skipped_mandatory_task_also_counts_toward_completion(self):
-        url = reverse("cycle-tasks-detail", args=[self.cycle_task_a.cycle_task_id])
-        response = self.client.patch(url, {"status": "skipped"})
+    def test_cycle_can_be_explicitly_completed_once_all_tasks_are_resolved(self):
+        self.cycle_task_a.status = "completed"
+        self.cycle_task_a.save(update_fields=["status"])
+        self.cycle_task_b.status = "skipped"
+        self.cycle_task_b.save(update_fields=["status"])
+
+        response = self.client.post(reverse("cycles-complete", args=[self.cycle.cycle_id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         self.cycle.refresh_from_db()

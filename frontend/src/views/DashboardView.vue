@@ -271,7 +271,7 @@ function taskBarClass(bar) {
   if (bar.status === 'skipped') return 'tb-skipped'
   if (bar.isOverdue) return 'tb-overdue'
   if (bar.status === 'in_progress') return 'tb-in-progress'
-  if (bar.isMandatory) return 'tb-mandatory'
+  if (bar.isMandatory && bar.status !== 'pending') return 'tb-mandatory'
   return 'tb-pending'
 }
 
