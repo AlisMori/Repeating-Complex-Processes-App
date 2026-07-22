@@ -369,6 +369,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
                 "cycle_task_id": cycle_task.pk,
                 "scope": scope,
                 "shifted_tasks": result["shifted"],
+                "adjusted_activities": result["adjusted_activities"],
                 "warnings": result["warnings"],
             },
             status=status.HTTP_200_OK,
