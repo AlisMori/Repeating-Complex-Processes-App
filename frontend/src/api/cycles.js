@@ -6,6 +6,7 @@
 //   GET        /api/cycles/                              — list all user cycles
 //   GET        /api/cycles/:id/                           — single cycle
 //   POST       /api/cycles/:id/shut_down/                 — shut down a cycle
+//   POST       /api/cycles/:id/complete/                  — complete a fully resolved cycle
 //   GET        /api/cycles/:id/export/                    — full export (cycle + tasks + activities)
 //   GET        /api/cycle-tasks/?cycle=:id                — tasks for a cycle
 //   PATCH      /api/cycle-tasks/:id/                      — update task status (only field allowed through)
@@ -50,6 +51,10 @@ export function getCycle(id) {
 
 export function shutdownCycle(id) {
   return api.post(`/cycles/${id}/shut_down/`, null, { requiresAuth: true })
+}
+
+export function completeCycle(id) {
+  return api.post(`/cycles/${id}/complete/`, null, { requiresAuth: true })
 }
 
 export function exportCycle(id) {

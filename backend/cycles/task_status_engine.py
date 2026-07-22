@@ -128,29 +128,6 @@ def apply_prerequisite_resolution(cycle_task, new_status):
     cycle_task.save(update_fields=["status"])
 
 
-def maybe_complete_cycle(cycle):
-    """A running cycle moves to completed once every mandatory task is
-    done (completed or skipped), optional tasks don't block this (FR-6.7).
-    "completed" already existed as a CycleInstance status choice but
-    nothing in the codebase ever set it before this.
-
-    A cycle with zero mandatory tasks never auto-completes here, nothing
-    to require completion of, it stays running until shut down manually.
-    """
-    if cycle.status != "running":
-        return
-
-    mandatory_tasks = cycle.cycle_tasks.filter(is_mandatory=True)
-    if not mandatory_tasks.exists():
-        return
-
-    if mandatory_tasks.exclude(status__in=["completed", "skipped"]).exists():
-        return
-
-    cycle.status = "completed"
-    cycle.save(update_fields=["status"])
-
-
 def activate_started_tasks(today=None):
     """Background job companion to mark_overdue_tasks. A pending task
     whose start date has arrived moves itself into in_progress on its

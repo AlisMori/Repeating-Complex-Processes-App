@@ -7,12 +7,13 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseDatePicker from '@/components/ui/BaseDatePicker.vue'
 import CycleGanttChart from '@/components/CycleGanttChart.vue'
 import { useToastStore } from '@/stores/toast'
 import {
   getCycle, getCycleTasks, getCycleActivities,
-  shutdownCycle,
+  shutdownCycle, completeCycle,
   updateCycleTask, previewTaskShift, applyTaskShift,
   updateTaskNotificationPreference,
   setTaskNote, clearTaskNote,
@@ -31,6 +32,15 @@ const toast = useToastStore()
 
 const shutdownModal = ref(false)
 const shutdownLoading = ref(false)
+const completeCycleModal = ref(false)
+const completeCycleLoading = ref(false)
+const lastTaskModal = ref({ open: false, taskId: null, newStatus: null })
+const lastTaskLoading = ref(false)
+const mandatorySkipModal = ref({
+  open: false,
+  taskId: null,
+})
+
 
 // Overflow "⋯" menu shown per row for secondary actions (note,
 // reschedule, edit dates) — only one open at a time, closes on any
@@ -146,6 +156,9 @@ const pendingTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.s
 const inProgressTasks = computed(() => tasks.value.filter(t => !isOverdue(t) && t.status === 'in_progress'))
 const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed'))
 const skippedTasks = computed(() => tasks.value.filter(t => t.status === 'skipped'))
+const allTasksResolved = computed(() => (
+  tasks.value.length > 0 && tasks.value.every(t => ['completed', 'skipped'].includes(t.status))
+))
 
 const progress = computed(() => {
   if (tasks.value.length === 0) return 0
@@ -296,15 +309,30 @@ function toggleActivityExpanded(activity) {
   expandedActivityIds.value = next
 }
 
-async function updateTaskStatus(taskId, newStatus) {
-  try {
-    const { data } = await updateCycleTask(taskId, newStatus)
-    await loadCycle()
-    if (data.cycle_just_completed) {
-      toast.success('Last task of the cycle completed/skipped — cycle shut down.')
-    } else {
-      toast.success('Task status updated.')
+async function updateTaskStatus(taskId, newStatus, skipConfirmed = false) {
+  const task = tasks.value.find(task => task.cycle_task_id === taskId)
+
+  if (newStatus === 'skipped' && task?.is_mandatory && !skipConfirmed) {
+    mandatorySkipModal.value = {
+      open: true,
+      taskId,
     }
+    return
+  }
+
+  const closesLastOpenTask = ['completed', 'skipped'].includes(newStatus) && tasks.value.every(task => (
+    task.cycle_task_id === taskId || ['completed', 'skipped'].includes(task.status)
+  ))
+
+  if (cycle.value?.status === 'running' && closesLastOpenTask) {
+    lastTaskModal.value = { open: true, taskId, newStatus }
+    return
+  }
+
+  try {
+    await updateCycleTask(taskId, newStatus)
+    await loadCycle()
+    toast.success('Task status updated.')
   } catch (e) {
     if (isPrerequisitesUnresolvedError(e)) {
       prereqModal.value = {
@@ -316,11 +344,62 @@ async function updateTaskStatus(taskId, newStatus) {
       }
       return
     }
+
     if (isCycleFrozenError(e)) {
       toast.error('This cycle is completed or shut down, so its tasks can no longer be changed.')
       return
     }
+
     toast.error(getErrorMessage(e, 'Failed to update task status.'))
+  }
+}
+
+async function confirmMandatorySkip() {
+  const taskId = mandatorySkipModal.value.taskId
+  mandatorySkipModal.value.open = false
+  await updateTaskStatus(taskId, 'skipped', true)
+}
+
+async function finishLastTask(completeCycleToo) {
+  const { taskId, newStatus } = lastTaskModal.value
+  const taskStatusLabel = newStatus === 'skipped' ? 'skipped' : 'completed'
+  lastTaskLoading.value = true
+  try {
+    await updateCycleTask(taskId, newStatus)
+    if (completeCycleToo) {
+      await completeCycle(cycleId)
+      toast.success(`Task ${taskStatusLabel} and cycle completed.`)
+    } else {
+      toast.success(`Task ${taskStatusLabel}. The cycle remains active until you complete it.`)
+    }
+    lastTaskModal.value.open = false
+    await loadCycle()
+  } catch (e) {
+    if (isPrerequisitesUnresolvedError(e)) {
+      lastTaskModal.value.open = false
+      prereqModal.value = {
+        open: true, taskId, newStatus,
+        unresolved: getUnresolvedPrerequisites(e), choices: {},
+      }
+      return
+    }
+    toast.error(getErrorMessage(e, 'Failed to update the task.'))
+  } finally {
+    lastTaskLoading.value = false
+  }
+}
+
+async function confirmCompleteCycle() {
+  completeCycleLoading.value = true
+  try {
+    await completeCycle(cycleId)
+    completeCycleModal.value = false
+    await loadCycle()
+    toast.success('Cycle completed.')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to complete cycle.'))
+  } finally {
+    completeCycleLoading.value = false
   }
 }
 
@@ -453,6 +532,19 @@ async function confirmShift() {
       toast.warning(data.warnings.map(w => w.message || w).join(' '))
     } else {
       toast.success(m.scope === 'cascade' ? 'Date updated and dependent tasks recalculated.' : 'Date updated.')
+    }
+
+    const adjustedActivities = data.adjusted_activities || []
+    if (adjustedActivities.length === 1) {
+      const activity = adjustedActivities[0]
+      const taskWord = (data.shifted_tasks?.length || 0) > 1 ? 'tasks' : 'task'
+      toast.info(
+        `Activity "${activity.activity_name}" was adjusted to ${formatDate(activity.new_start_date)}–${formatDate(activity.new_end_date)} to include the shifted ${taskWord}.`
+      )
+    } else if (adjustedActivities.length > 1) {
+      toast.info(
+        `${adjustedActivities.length} activity date ranges were adjusted to include the shifted tasks.`
+      )
     }
   } catch (e) {
     if (isCycleFrozenError(e)) {
@@ -685,6 +777,7 @@ onMounted(loadCycle)
       </div>
       <div v-if="cycle" style="margin-left: auto; display: flex; gap: 10px;">
         <BaseButton variant="secondary" size="sm" @click="router.push({ name: 'cycle-create' })">Start new cycle</BaseButton>
+        <BaseButton v-if="cycle.status === 'running' && allTasksResolved" variant="primary" size="sm" @click="completeCycleModal = true">Complete Cycle</BaseButton>
         <BaseButton v-if="cycle.status === 'running'" variant="danger" size="sm" @click="shutdownModal = true">Shut Down Cycle</BaseButton>
       </div>
     </template>
@@ -788,7 +881,7 @@ onMounted(loadCycle)
                         :key="opt.value"
                         class="status-pill"
                         :class="statusClass(opt.value)"
-                        @click="updateTaskStatus(task.cycle_task_id, opt.value)"
+                        @click.stop="updateTaskStatus(task.cycle_task_id, opt.value)"
                       >{{ opt.label }}</button>
                     </div>
                   </div>
@@ -1023,16 +1116,88 @@ onMounted(loadCycle)
         </div>
       </template>
     </div>
+    <!-- MANDATORY TASK SKIP CONFIRMATION -->
+    <BaseModal
+      v-model="mandatorySkipModal.open"
+      title="Skip mandatory task?"
+      confirm-label="Skip task anyway"
+      cancel-label="Keep task"
+      confirm-variant="danger"
+      @confirm="confirmMandatorySkip"
+    >
+      <div class="confirmation-warning">
+        <div class="confirmation-warning-icon">!</div>
+        <div>
+          <p class="confirmation-warning-title">Mandatory task</p>
+          <p class="confirmation-warning-text">
+            This task has been marked as mandatory. Are you sure you want to skip it?
+          </p>
+        </div>
+      </div>
+    </BaseModal>
     <!-- SHUT DOWN CONFIRM MODAL -->
     <BaseModal
       v-model="shutdownModal"
       title="Shut down cycle?"
       confirm-label="Shut down"
+      cancel-label="Keep cycle active"
       confirm-variant="danger"
       :loading="shutdownLoading"
       @confirm="confirmShutdownCycle"
     >
-      <p>Are you sure you want to shut down this cycle? This cannot be undone.</p>
+      <div class="confirmation-warning">
+        <div class="confirmation-warning-icon">!</div>
+        <div>
+          <p class="confirmation-warning-title">This action is permanent</p>
+          <p class="confirmation-warning-text">
+            Shutting down this cycle will stop the process and prevent any further
+            task changes. Are you sure you want to continue?
+          </p>
+        </div>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      v-model="lastTaskModal.open"
+      title="Last unfinished task"
+      confirm-label="Complete cycle automatically"
+      cancel-label="Keep cycle active"
+      :loading="lastTaskLoading"
+      @confirm="finishLastTask(true)"
+      @cancel="finishLastTask(false)"
+    >
+      <div class="confirmation-success">
+        <div class="confirmation-success-icon">✓</div>
+        <div>
+          <p class="confirmation-success-title">All cycle tasks will be resolved</p>
+          <p class="confirmation-success-text">
+            This is the last unfinished task and it will be marked as
+            {{ lastTaskModal.newStatus === 'skipped' ? 'skipped' : 'completed' }}.
+            Would you like to complete the cycle automatically?
+          </p>
+        </div>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      v-model="completeCycleModal"
+      title="Complete cycle?"
+      confirm-label="Complete cycle"
+      cancel-label="Keep cycle active"
+      confirm-variant="danger"
+      :loading="completeCycleLoading"
+      @confirm="confirmCompleteCycle"
+    >
+      <div class="confirmation-warning">
+        <div class="confirmation-warning-icon">!</div>
+        <div>
+          <p class="confirmation-warning-title">This action is permanent</p>
+          <p class="confirmation-warning-text">
+            Once completed, this cycle cannot be returned to active and its tasks
+            can no longer be modified. Are you sure you want to continue?
+          </p>
+        </div>
+      </div>
     </BaseModal>
 
     <!-- RESCHEDULE (SHIFT) MODAL -->
@@ -1142,7 +1307,7 @@ onMounted(loadCycle)
       <div v-for="t in prereqModal.unresolved" :key="t.cycle_task_id" class="prereq-row">
         <span class="prereq-name">{{ t.task_name }}</span>
         <BaseSelect v-model="prereqModal.choices[t.cycle_task_id]">
-          <option :value="undefined" disabled>Choose...</option>
+          <option value="" disabled>Choose...</option>
           <option value="completed">Completed</option>
           <option value="skipped">Skipped</option>
         </BaseSelect>
@@ -1469,4 +1634,80 @@ onMounted(loadCycle)
 .info-row:last-child { border-bottom: none; }
 .info-label { font-size: var(--font-label); color: var(--text-secondary); }
 .info-value { font-size: var(--font-body); font-weight: 500; color: var(--text-primary); }
+
+.confirmation-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #FECACA;
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+}
+
+.confirmation-warning-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: var(--white);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.confirmation-warning-title {
+  margin: 0 0 4px;
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.confirmation-warning-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.confirmation-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #BBF7D0;
+  border-radius: var(--radius-md);
+  background: #F0FDF4;
+}
+
+.confirmation-success-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #16A34A;
+  color: var(--white);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.confirmation-success-title {
+  margin: 0 0 4px;
+  color: #15803D;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.confirmation-success-text {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
 </style>

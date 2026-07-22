@@ -36,7 +36,6 @@ from .task_status_engine import (
     assert_cycle_is_running,
     effective_status_for_transitions,
     find_unresolved_prerequisites,
-    maybe_complete_cycle,
     validate_status_transition,
 )
 from .serializers import (
@@ -136,6 +135,33 @@ class CycleInstanceViewSet(viewsets.ModelViewSet):
         cycle.save(update_fields=["status"])
         return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        """Explicitly finish a cycle after every task has been resolved."""
+        with transaction.atomic():
+            cycle = CycleInstance.objects.select_for_update().get(pk=self.get_object().pk)
+
+            try:
+                assert_cycle_is_running(cycle)
+            except CycleNotRunning as exc:
+                raise CycleFrozen(exc.message)
+
+            cycle_tasks = cycle.cycle_tasks.all()
+            unresolved = cycle_tasks.exclude(status__in=["completed", "skipped"])
+            if not cycle_tasks.exists() or unresolved.exists():
+                from rest_framework.exceptions import ValidationError
+
+                raise ValidationError({
+                    "detail": "The cycle must contain tasks, and every task must be completed or skipped before the cycle can be completed.",
+                    "code": "cycle_tasks_incomplete",
+                    "unresolved_task_ids": list(unresolved.values_list("cycle_task_id", flat=True)),
+                })
+
+            cycle.status = "completed"
+            cycle.save(update_fields=["status"])
+
+        return Response(self.get_serializer(cycle).data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["get"])
     def export(self, request, pk=None):
         cycle = self.get_object()
@@ -183,14 +209,6 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
 
         serializer.save()
 
-    def update(self, request, *args, **kwargs):
-        self._cycle_just_completed = False
-        response = super().update(request, *args, **kwargs)
-        if self._cycle_just_completed:
-            response.data = dict(response.data)
-            response.data["cycle_just_completed"] = True
-        return response
-
     def perform_update(self, serializer):
         # Module 9, FR-6.1/FR-6.4. Status is the only field this
         # serializer allows through, everything else is read-only, so
@@ -214,10 +232,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
             if new_status == "completed" and new_status != cycle_task.status:
                 self._resolve_prerequisites_before_completion(cycle_task)
 
-            updated = serializer.save()
-
-            if updated.status in ("completed", "skipped"):
-                self._cycle_just_completed = maybe_complete_cycle(updated.cycle)
+            serializer.save()
 
     def _resolve_prerequisites_before_completion(self, cycle_task):
         # A task is being marked completed while something it directly
@@ -354,6 +369,7 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
                 "cycle_task_id": cycle_task.pk,
                 "scope": scope,
                 "shifted_tasks": result["shifted"],
+                "adjusted_activities": result["adjusted_activities"],
                 "warnings": result["warnings"],
             },
             status=status.HTTP_200_OK,

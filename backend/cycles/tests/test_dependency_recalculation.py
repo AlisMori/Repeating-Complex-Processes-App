@@ -5,8 +5,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
-from templates_mgmt.models import Template, TemplateTask
-from cycles.models import CycleInstance, CycleTask, TaskDependency
+from templates_mgmt.models import Template, TemplateActivity, TemplateTask
+from cycles.models import CycleActivity, CycleInstance, CycleTask, TaskDependency
 
 
 class DependencyRecalculationEngineTests(APITestCase):
@@ -111,6 +111,160 @@ class DependencyRecalculationEngineTests(APITestCase):
         self.assertEqual(response.data["error"], "insufficient_gap")
         self.cycle_task_a.refresh_from_db()
         self.assertEqual(self.cycle_task_a.calculated_start_date, date(2026, 7, 1))
+
+    # -- Parent cycle activity adjustment ----------------------------------
+
+    def test_single_shift_expands_activity_end_when_task_moves_outside(self):
+        activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            activity_name="Delivery",
+            calculated_start_date=date(2026, 7, 1),
+            calculated_end_date=date(2026, 7, 7),
+        )
+        self.cycle_task_c.cycle_activity = activity
+        self.cycle_task_c.save(update_fields=["cycle_activity"])
+
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "single"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["adjusted_activities"]), 1)
+        adjustment = response.data["adjusted_activities"][0]
+        self.assertEqual(adjustment["cycle_activity_id"], activity.cycle_activity_id)
+        self.assertEqual(adjustment["activity_name"], "Delivery")
+        self.assertEqual(adjustment["old_end_date"], "2026-07-07")
+        self.assertEqual(adjustment["new_end_date"], "2026-07-09")
+        activity.refresh_from_db()
+        self.assertEqual(activity.calculated_start_date, date(2026, 7, 1))
+        self.assertEqual(activity.calculated_end_date, date(2026, 7, 9))
+
+    def test_single_shift_expands_activity_start_when_task_moves_outside(self):
+        template_task = TemplateTask.objects.create(
+            template=self.template, task_name="Standalone", day_offset=5, duration_days=1
+        )
+        activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            activity_name="Preparation",
+            calculated_start_date=date(2026, 7, 5),
+            calculated_end_date=date(2026, 7, 12),
+        )
+        cycle_task = CycleTask.objects.create(
+            cycle=self.cycle,
+            template_task=template_task,
+            cycle_activity=activity,
+            task_name="Standalone",
+            calculated_start_date=date(2026, 7, 6),
+            calculated_end_date=date(2026, 7, 7),
+        )
+
+        url = reverse("cycle-tasks-shift", args=[cycle_task.cycle_task_id])
+        response = self.client.post(
+            url, {"new_start_date": "2026-07-03", "scope": "single"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["adjusted_activities"]), 1)
+        self.assertEqual(
+            response.data["adjusted_activities"][0]["new_start_date"],
+            "2026-07-03",
+        )
+        activity.refresh_from_db()
+        self.assertEqual(activity.calculated_start_date, date(2026, 7, 3))
+        self.assertEqual(activity.calculated_end_date, date(2026, 7, 12))
+
+    def test_activity_is_not_changed_when_shifted_task_remains_inside(self):
+        activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            activity_name="Wide activity",
+            calculated_start_date=date(2026, 7, 1),
+            calculated_end_date=date(2026, 7, 20),
+        )
+        self.cycle_task_c.cycle_activity = activity
+        self.cycle_task_c.save(update_fields=["cycle_activity"])
+
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 1, "scope": "single"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["adjusted_activities"], [])
+        activity.refresh_from_db()
+        self.assertEqual(activity.calculated_start_date, date(2026, 7, 1))
+        self.assertEqual(activity.calculated_end_date, date(2026, 7, 20))
+
+    def test_cascade_expands_every_affected_cycle_activity(self):
+        first_activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            activity_name="First phase",
+            calculated_start_date=date(2026, 7, 1),
+            calculated_end_date=date(2026, 7, 3),
+        )
+        second_activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            activity_name="Second phase",
+            calculated_start_date=date(2026, 7, 3),
+            calculated_end_date=date(2026, 7, 7),
+        )
+        self.cycle_task_a.cycle_activity = first_activity
+        self.cycle_task_a.save(update_fields=["cycle_activity"])
+        CycleTask.objects.filter(
+            pk__in=[self.cycle_task_b.pk, self.cycle_task_c.pk]
+        ).update(cycle_activity=second_activity)
+
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_a.cycle_task_id])
+        response = self.client.post(
+            url,
+            {"delay_days": 2, "scope": "cascade", "override_fixed": True},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["adjusted_activities"]), 2)
+        self.assertEqual(
+            {item["activity_name"] for item in response.data["adjusted_activities"]},
+            {"First phase", "Second phase"},
+        )
+        first_activity.refresh_from_db()
+        second_activity.refresh_from_db()
+        self.assertEqual(first_activity.calculated_end_date, date(2026, 7, 5))
+        self.assertEqual(second_activity.calculated_end_date, date(2026, 7, 9))
+
+        for activity in (first_activity, second_activity):
+            for task in activity.cycle_tasks.all():
+                self.assertGreaterEqual(
+                    task.calculated_start_date, activity.calculated_start_date
+                )
+                self.assertLessEqual(
+                    task.calculated_end_date, activity.calculated_end_date
+                )
+
+    def test_cycle_shift_does_not_modify_template_dates(self):
+        template_activity = TemplateActivity.objects.create(
+            template=self.template,
+            activity_name="Template phase",
+            start_offset_days=0,
+            end_offset_days=6,
+        )
+        self.task_c.template_activity = template_activity
+        self.task_c.save(update_fields=["template_activity"])
+        activity = CycleActivity.objects.create(
+            cycle=self.cycle,
+            template_activity=template_activity,
+            activity_name="Runtime phase",
+            calculated_start_date=date(2026, 7, 1),
+            calculated_end_date=date(2026, 7, 7),
+        )
+        self.cycle_task_c.cycle_activity = activity
+        self.cycle_task_c.save(update_fields=["cycle_activity"])
+
+        url = reverse("cycle-tasks-shift", args=[self.cycle_task_c.cycle_task_id])
+        response = self.client.post(url, {"delay_days": 2, "scope": "single"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        template_activity.refresh_from_db()
+        self.task_c.refresh_from_db()
+        self.assertEqual(template_activity.start_offset_days, 0)
+        self.assertEqual(template_activity.end_offset_days, 6)
+        self.assertEqual(self.task_c.day_offset, 5)
+        self.assertEqual(self.task_c.duration_days, 1)
 
     # -- Cascade shift ---------------------------------------------------
 

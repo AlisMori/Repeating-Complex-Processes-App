@@ -1,6 +1,9 @@
 from datetime import timedelta
 
-from .models import CycleTask, TaskDependency
+from django.db import transaction
+from django.db.models import Max, Min
+
+from .models import CycleActivity, CycleTask, TaskDependency
 
 MAX_DIRECT_DEPENDENTS = 2
 
@@ -406,6 +409,56 @@ def preview_task_shift(cycle_task, delay_days=None, new_start_date=None, new_end
     }
 
 
+def expand_affected_cycle_activities(cycle_tasks):
+    """Expand runtime activities so they still contain their shifted tasks.
+
+    Only CycleActivity rows linked to the supplied CycleTask rows are touched.
+    Existing activity boundaries are preserved unless a child task now falls
+    outside them, so this never shrinks an activity and never modifies the
+    source template or any template-level activity/task dates.
+    """
+    activity_ids = {
+        task.cycle_activity_id
+        for task in cycle_tasks
+        if task.cycle_activity_id is not None
+    }
+
+    adjusted_activities = []
+    for activity in CycleActivity.objects.select_for_update().filter(pk__in=activity_ids):
+        bounds = activity.cycle_tasks.aggregate(
+            earliest_start=Min("calculated_start_date"),
+            latest_end=Max("calculated_end_date"),
+        )
+        earliest_start = bounds["earliest_start"]
+        latest_end = bounds["latest_end"]
+        if earliest_start is None or latest_end is None:
+            continue
+
+        old_start = activity.calculated_start_date
+        old_end = activity.calculated_end_date
+        update_fields = []
+        if earliest_start < activity.calculated_start_date:
+            activity.calculated_start_date = earliest_start
+            update_fields.append("calculated_start_date")
+        if latest_end > activity.calculated_end_date:
+            activity.calculated_end_date = latest_end
+            update_fields.append("calculated_end_date")
+
+        if update_fields:
+            activity.save(update_fields=update_fields)
+            adjusted_activities.append({
+                "cycle_activity_id": activity.pk,
+                "activity_name": activity.activity_name,
+                "old_start_date": old_start.isoformat(),
+                "old_end_date": old_end.isoformat(),
+                "new_start_date": activity.calculated_start_date.isoformat(),
+                "new_end_date": activity.calculated_end_date.isoformat(),
+            })
+
+    return adjusted_activities
+
+
+@transaction.atomic
 def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
                       new_end_date=None, override_fixed=False):
     """Writes. scope is 'single' or 'cascade'.
@@ -465,7 +518,12 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
         cycle_task.calculated_start_date = new_start
         cycle_task.calculated_end_date = new_end
         cycle_task.save(update_fields=["calculated_start_date", "calculated_end_date"])
-        return {"shifted": shifted, "warnings": []}
+        adjusted_activities = expand_affected_cycle_activities([cycle_task])
+        return {
+            "shifted": shifted,
+            "adjusted_activities": adjusted_activities,
+            "warnings": [],
+        }
 
     # scope == "cascade": plan first, and REFUSE the whole operation if
     # any downstream task can't move to keep the dependency valid — a
@@ -495,6 +553,7 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
     cycle_task.save(update_fields=["calculated_start_date", "calculated_end_date"])
 
     warnings = []
+    shifted_cycle_tasks = [cycle_task]
     for step in plan:
         dependent = CycleTask.objects.get(pk=step["cycle_task_id"])
         shifted.append({
@@ -508,6 +567,7 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
         dependent.calculated_start_date = step["new_start_date"]
         dependent.calculated_end_date = step["new_end_date"]
         dependent.save(update_fields=["calculated_start_date", "calculated_end_date"])
+        shifted_cycle_tasks.append(dependent)
         if step.get("was_fixed"):
             warnings.append({
                 "error": "fixed_date_moved",
@@ -515,4 +575,9 @@ def apply_task_shift(cycle_task, scope, delay_days=None, new_start_date=None,
                 "message": f"Task '{dependent.task_name}' has a fixed date and was moved anyway (override_fixed).",
             })
 
-    return {"shifted": shifted, "warnings": warnings}
+    adjusted_activities = expand_affected_cycle_activities(shifted_cycle_tasks)
+    return {
+        "shifted": shifted,
+        "adjusted_activities": adjusted_activities,
+        "warnings": warnings,
+    }
