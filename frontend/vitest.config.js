@@ -21,6 +21,6 @@ export default defineConfig({
     // runners stay separate, each running its own files via its
     // own script (npm test for Node's runner, npm run test:unit
     // for Vitest).
-    include: ['tests/unit/**/*.spec.js'],
+    include: ['tests/unit/**/*.spec.js', 'tests/integration/**/*.spec.js'],
   }
 })
