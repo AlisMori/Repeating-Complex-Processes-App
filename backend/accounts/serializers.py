@@ -1,11 +1,8 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework import serializers
@@ -19,7 +16,13 @@ from .auth_sessions import (
     serialize_session_window,
 )
 from .forms import SafeMessageIdPasswordResetForm
-from .models import AuthSession
+from .models import AuthSession, ShareNotification
+from .password_reset import (
+    PASSWORD_RESET_TOKEN_STATUS_EXPIRED,
+    PASSWORD_RESET_TOKEN_STATUS_VALID,
+    get_password_reset_token_status,
+    get_user_from_password_reset_uid,
+)
 
 
 User = get_user_model()
@@ -37,12 +40,108 @@ class UserSerializer(serializers.ModelSerializer):
             "notification_opt_in",
             "created_at",
         ]
+        read_only_fields = ["id", "username", "created_at"]
+
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(required=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "email",
+            "first_name",
+            "last_name",
+            "notification_opt_in",
+        ]
+
+    def validate_email(self, value):
+        normalized_email = value.strip().lower()
+        existing = User.objects.filter(email__iexact=normalized_email).exclude(pk=self.instance.pk)
+        if existing.exists():
+            raise serializers.ValidationError("A user with that email already exists.")
+        return normalized_email
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    default_error_messages = {
+        "current_password_incorrect": "Current password is incorrect.",
+    }
+
+    def validate_current_password(self, value):
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise serializers.ValidationError(self.error_messages["current_password_incorrect"])
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context["request"].user
+        try:
+            validate_password(value, user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
+
+    def validate(self, attrs):
+        if attrs["current_password"] == attrs["new_password"]:
+            raise serializers.ValidationError(
+                {"new_password": ["New password must be different from the current password."]}
+            )
+        return attrs
+
+    def save(self):
+        user = self.context["request"].user
+        user.set_password(self.validated_data["new_password"])
+        user.save(update_fields=["password"])
+        return user
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    confirmation_text = serializers.CharField(write_only=True)
+
+    default_error_messages = {
+        "confirmation_mismatch": "Type DELETE to confirm account deletion.",
+    }
+
+    def validate_confirmation_text(self, value):
+        if value.strip() != "DELETE":
+            raise serializers.ValidationError(self.error_messages["confirmation_mismatch"])
+        return value
+
+    def save(self):
+        user = self.context["request"].user
+        user.delete()
 
 
 class LoginUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "email"]
+
+
+class UserLookupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "username"]
+
+
+class ShareNotificationSerializer(serializers.ModelSerializer):
+    sender_username = serializers.CharField(source="sender.username", read_only=True)
+
+    class Meta:
+        model = ShareNotification
+        fields = [
+            "notification_id",
+            "sender_username",
+            "template_name",
+            "template",
+            "is_read",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -113,14 +212,15 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
-        try:
-            user_id = force_str(urlsafe_base64_decode(attrs["uid"]))
-            user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, UnicodeDecodeError, User.DoesNotExist):
+        user = get_user_from_password_reset_uid(attrs["uid"])
+        if user is None:
             raise serializers.ValidationError({"uid": ["Invalid reset link."]})
 
-        if not default_token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError({"token": ["Invalid or expired reset token."]})
+        token_status = get_password_reset_token_status(user, attrs["token"])
+        if token_status == PASSWORD_RESET_TOKEN_STATUS_EXPIRED:
+            raise serializers.ValidationError({"token": ["This reset link has expired."]})
+        if token_status != PASSWORD_RESET_TOKEN_STATUS_VALID:
+            raise serializers.ValidationError({"token": ["Invalid reset link."]})
 
         try:
             validate_password(attrs["new_password"], user=user)
@@ -149,7 +249,8 @@ class PasswordResetRequestSerializer(serializers.Serializer):
             request=django_request,
             use_https=django_request.is_secure() if django_request is not None else False,
             from_email=settings.DEFAULT_FROM_EMAIL,
-            email_template_name="registration/password_reset_email.html",
+            email_template_name="registration/password_reset_email.txt",
+            html_email_template_name="registration/password_reset_email.html",
             subject_template_name="registration/password_reset_subject.txt",
         )
 

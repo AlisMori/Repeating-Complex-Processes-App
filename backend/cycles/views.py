@@ -389,6 +389,26 @@ class CycleTaskViewSet(viewsets.ModelViewSet):
         cycle_task.save(update_fields=["note_text"])
         return Response(self.get_serializer(cycle_task).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"])
+    def notification_preference(self, request, pk=None):
+        cycle_task = self.get_object()
+
+        try:
+            assert_cycle_is_running(cycle_task.cycle)
+        except CycleNotRunning as exc:
+            raise CycleFrozen(exc.message)
+
+        notification_opt_in = request.data.get("notification_opt_in")
+        if not isinstance(notification_opt_in, bool):
+            return Response(
+                {"notification_opt_in": ["Must be a boolean."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cycle_task.notification_opt_in = notification_opt_in
+        cycle_task.save(update_fields=["notification_opt_in"])
+        return Response(self.get_serializer(cycle_task).data, status=status.HTTP_200_OK)
+
 
 class CycleActivityViewSet(viewsets.ModelViewSet):
     serializer_class = CycleActivitySerializer

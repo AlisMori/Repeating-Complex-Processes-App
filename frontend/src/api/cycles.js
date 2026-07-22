@@ -98,6 +98,14 @@ export function clearTaskNote(taskId) {
   return api.delete(`/cycle-tasks/${taskId}/note/`, { requiresAuth: true })
 }
 
+export function updateTaskNotificationPreference(taskId, notificationOptIn) {
+  return api.post(
+    `/cycle-tasks/${taskId}/notification_preference/`,
+    { notification_opt_in: notificationOptIn },
+    { requiresAuth: true },
+  )
+}
+
 // ── CYCLE ACTIVITIES ──────────────────────────────────────
 
 export function getCycleActivities(cycleId) {

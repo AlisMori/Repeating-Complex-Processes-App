@@ -1,8 +1,11 @@
 from datetime import timedelta
 import re
+from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
 from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
@@ -12,7 +15,10 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from accounts.models import AuthSession
+from accounts.forms import format_password_reset_expiry
+from accounts.models import AuthSession, ShareNotification
+from cycles.models import CycleInstance
+from templates_mgmt.models import Template
 
 
 User = get_user_model()
@@ -22,14 +28,25 @@ User = get_user_model()
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     DEFAULT_FROM_EMAIL="test@example.com",
     ALLOWED_HOSTS=["testserver", "localhost"],
+    FRONTEND_URL="http://localhost:5173",
 )
 class AuthApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="alice",
             email="alice@example.com",
             password="StrongPass123!",
         )
+
+    def build_reset_uid(self):
+        return urlsafe_base64_encode(str(self.user.pk).encode())
+
+    def build_reset_token(self):
+        return default_token_generator.make_token(self.user)
+
+    def extract_reset_urls(self, text):
+        return re.findall(r"http://localhost:5173/auth/password-reset/confirm/\S+", text)
 
     def login_and_get_tokens(self):
         response = self.client.post(
@@ -162,8 +179,8 @@ class AuthApiTests(APITestCase):
             {"email": "alice@example.com"},
             format="json",
         )
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
         password_reset_confirm_response = self.client.post(
             reverse("auth-password-reset-confirm"),
             {
@@ -195,6 +212,196 @@ class AuthApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], "alice")
+
+    def test_user_search_requires_authentication(self):
+        response = self.client.get(reverse("auth-user-search"), {"q": "ali"})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_user_search_returns_matching_usernames_and_excludes_self(self):
+        User.objects.create_user(
+            username="alina",
+            email="alina@example.com",
+            password="StrongPass456!",
+        )
+        User.objects.create_user(
+            username="bob",
+            email="bob@example.com",
+            password="StrongPass456!",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.get(reverse("auth-user-search"), {"q": "ali"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["username"] for item in response.data], ["alina"])
+
+    def test_share_notifications_list_and_mark_read(self):
+        sender = User.objects.create_user(
+            username="sender",
+            email="sender@example.com",
+            password="StrongPass456!",
+        )
+        template = Template.objects.create(user=self.user, template_name="Shared Checklist")
+        notification = ShareNotification.objects.create(
+            recipient=self.user,
+            sender=sender,
+            template=template,
+            template_name="Shared Checklist",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        list_response = self.client.get(reverse("auth-share-notifications"))
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]["notification_id"], notification.notification_id)
+        self.assertEqual(list_response.data[0]["sender_username"], "sender")
+
+        mark_read_response = self.client.post(
+            reverse("auth-share-notifications-mark-read"),
+            {"ids": [notification.notification_id]},
+            format="json",
+        )
+
+        self.assertEqual(mark_read_response.status_code, status.HTTP_200_OK)
+        notification.refresh_from_db()
+        self.assertTrue(notification.is_read)
+
+        after_response = self.client.get(reverse("auth-share-notifications"))
+        self.assertEqual(after_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(after_response.data, [])
+
+    def test_me_patch_updates_profile_fields(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {
+                "first_name": "Alice",
+                "last_name": "Ng",
+                "email": "alice.ng@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "Alice")
+        self.assertEqual(self.user.last_name, "Ng")
+        self.assertEqual(self.user.email, "alice.ng@example.com")
+
+    def test_me_patch_rejects_duplicate_email(self):
+        User.objects.create_user(
+            username="bob",
+            email="bob@example.com",
+            password="StrongPass456!",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.patch(
+            reverse("auth-me"),
+            {"email": "BOB@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["email"], ["A user with that email already exists."])
+
+    def test_change_password_updates_hashed_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "StrongPass123!",
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("EvenStronger123!"))
+        self.assertNotEqual(self.user.password, "EvenStronger123!")
+
+    def test_change_password_rejects_wrong_current_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "WrongPass123!",
+                "new_password": "EvenStronger123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["current_password"], ["Current password is incorrect."])
+
+    def test_change_password_rejects_weak_new_password(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-change-password"),
+            {
+                "current_password": "StrongPass123!",
+                "new_password": "123",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+
+    def test_delete_account_deletes_user_and_owned_records(self):
+        template = Template.objects.create(user=self.user, template_name="Owned Template")
+        CycleInstance.objects.create(
+            user=self.user,
+            template=template,
+            cycle_name="Owned Cycle",
+            start_date=timezone.localdate(),
+            status="running",
+        )
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-delete-account"),
+            {
+                "confirmation_text": "DELETE",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(User.objects.filter(pk=self.user.pk).exists())
+        self.assertEqual(CycleInstance.objects.count(), 0)
+
+    def test_delete_account_rejects_wrong_confirmation_text(self):
+        login_response = self.login_and_get_tokens()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+
+        response = self.client.post(
+            reverse("auth-delete-account"),
+            {
+                "confirmation_text": "delete",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["confirmation_text"],
+            ["Type DELETE to confirm account deletion."],
+        )
 
     def test_me_rejects_invalid_jwt(self):
         token = AccessToken.for_user(self.user)
@@ -265,8 +472,8 @@ class AuthApiTests(APITestCase):
         self.assertEqual(response.data["refresh"], ["Invalid refresh token."])
 
     def test_password_reset_confirm_changes_password(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
         new_password = "EvenStronger123!"
 
         response = self.client.post(
@@ -284,8 +491,8 @@ class AuthApiTests(APITestCase):
         self.assertTrue(self.user.check_password(new_password))
 
     def test_password_reset_confirm_allows_login_with_new_password(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
         new_password = "EvenStronger123!"
 
         reset_response = self.client.post(
@@ -435,8 +642,8 @@ class AuthApiTests(APITestCase):
         self.assertEqual(AuthSession.objects.count(), 1)
 
     def test_password_reset_confirm_rejects_old_password_after_change(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
 
         reset_response = self.client.post(
             reverse("auth-password-reset-confirm"),
@@ -464,8 +671,8 @@ class AuthApiTests(APITestCase):
         )
 
     def test_password_reset_confirm_reused_token_fails(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
 
         first_response = self.client.post(
             reverse("auth-password-reset-confirm"),
@@ -490,11 +697,11 @@ class AuthApiTests(APITestCase):
         self.assertEqual(second_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(
             second_response.data["token"],
-            ["Invalid or expired reset token."],
+            ["Invalid reset link."],
         )
 
     def test_password_reset_confirm_invalid_token_fails(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
+        uid = self.build_reset_uid()
 
         response = self.client.post(
             reverse("auth-password-reset-confirm"),
@@ -507,11 +714,11 @@ class AuthApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data["token"], ["Invalid or expired reset token."])
+        self.assertEqual(response.data["token"], ["Invalid reset link."])
 
     def test_password_reset_confirm_weak_password_fails(self):
-        uid = urlsafe_base64_encode(str(self.user.pk).encode())
-        token = default_token_generator.make_token(self.user)
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
 
         response = self.client.post(
             reverse("auth-password-reset-confirm"),
@@ -539,6 +746,7 @@ class AuthApiTests(APITestCase):
             "If an account exists for this email, a password reset link has been sent.",
         )
         self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].subject, "Recurra – Reset Your Password")
 
     def test_password_reset_request_unknown_email_returns_generic_success(self):
         response = self.client.post(
@@ -582,7 +790,7 @@ class AuthApiTests(APITestCase):
         self.assertEqual(unknown_response.status_code, status.HTTP_200_OK)
         self.assertEqual(existing_response.data, unknown_response.data)
 
-    def test_password_reset_email_contains_uid_and_token_for_confirmation(self):
+    def test_password_reset_email_uses_professional_multipart_templates(self):
         response = self.client.post(
             reverse("auth-password-reset"),
             {"email": "alice@example.com"},
@@ -593,19 +801,124 @@ class AuthApiTests(APITestCase):
         self.assertEqual(len(mail.outbox), 1)
 
         email = mail.outbox[0]
-        expected_uid = urlsafe_base64_encode(str(self.user.pk).encode())
-
-        self.assertIn(expected_uid, email.body)
-        self.assertIn(
-            f"/api/auth/password-reset/confirm/{expected_uid}/",
-            email.body,
+        expected_uid = self.build_reset_uid()
+        expected_expiry_text = format_password_reset_expiry(
+            settings.PASSWORD_RESET_TIMEOUT
         )
 
-        token_match = re.search(
-            rf"/password-reset/confirm/{re.escape(expected_uid)}/([^/]+)/",
-            email.body,
-        )
-        self.assertIsNotNone(token_match)
+        self.assertEqual(email.subject, "Recurra – Reset Your Password")
+        self.assertNotRegex(email.body, r"<[^>]+>")
+        self.assertEqual(len(email.alternatives), 1)
+
+        html_body, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, "text/html")
+        self.assertIn(">Reset Password<", html_body)
+
+        plain_urls = self.extract_reset_urls(email.body)
+
+        self.assertEqual(len(plain_urls), 1)
+        self.assertIn(expected_uid, plain_urls[0])
+        self.assertIn(expected_uid, html_body)
+        self.assertIn(f'href="{plain_urls[0]}"', html_body)
+        self.assertIn(f">{plain_urls[0]}<", html_body)
         self.assertTrue(
-            default_token_generator.check_token(self.user, token_match.group(1))
+            default_token_generator.check_token(
+                self.user, plain_urls[0].rstrip("/").split("/")[-1]
+            )
         )
+
+        expiry_sentence = (
+            f"This link will expire in {expected_expiry_text} and can only be used once."
+        )
+        self.assertIn(expiry_sentence, email.body)
+        self.assertIn(expiry_sentence, html_body)
+
+    @override_settings(PASSWORD_RESET_TIMEOUT=7200)
+    def test_password_reset_email_expiry_text_tracks_password_reset_timeout(self):
+        response = self.client.post(
+            reverse("auth-password-reset"),
+            {"email": "alice@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+
+        email = mail.outbox[0]
+        html_body, mimetype = email.alternatives[0]
+        self.assertEqual(mimetype, "text/html")
+
+        expiry_sentence = (
+            "This link will expire in 2 hours and can only be used once."
+        )
+        self.assertIn(expiry_sentence, email.body)
+        self.assertIn(expiry_sentence, html_body)
+
+    def test_password_reset_confirm_expired_token_fails(self):
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
+        expired_time = default_token_generator._now() + timedelta(
+            seconds=settings.PASSWORD_RESET_TIMEOUT + 1
+        )
+
+        with patch.object(default_token_generator, "_now", return_value=expired_time):
+            response = self.client.post(
+                reverse("auth-password-reset-confirm"),
+                {
+                    "uid": uid,
+                    "token": token,
+                    "new_password": "EvenStronger123!",
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["token"], ["This reset link has expired."])
+
+    def test_password_reset_confirm_validation_endpoint_accepts_valid_link(self):
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
+
+        response = self.client.get(reverse("password_reset_confirm", args=[uid, token]))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["code"], "valid_link")
+        self.assertEqual(response.data["uid"], uid)
+        self.assertEqual(response.data["token"], token)
+
+    def test_password_reset_confirm_validation_endpoint_rejects_invalid_link(self):
+        uid = self.build_reset_uid()
+
+        response = self.client.get(
+            reverse("password_reset_confirm", args=[uid, "invalid-token"])
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "invalid_link")
+
+    def test_password_reset_confirm_validation_endpoint_rejects_expired_link(self):
+        uid = self.build_reset_uid()
+        token = self.build_reset_token()
+        expired_time = default_token_generator._now() + timedelta(
+            seconds=settings.PASSWORD_RESET_TIMEOUT + 1
+        )
+
+        with patch.object(default_token_generator, "_now", return_value=expired_time):
+            response = self.client.get(reverse("password_reset_confirm", args=[uid, token]))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "expired_link")
+
+    def test_password_reset_request_is_throttled(self):
+        responses = [
+            self.client.post(
+                reverse("auth-password-reset"),
+                {"email": "alice@example.com"},
+                format="json",
+            )
+            for _ in range(6)
+        ]
+
+        for response in responses[:5]:
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(responses[5].status_code, status.HTTP_429_TOO_MANY_REQUESTS)

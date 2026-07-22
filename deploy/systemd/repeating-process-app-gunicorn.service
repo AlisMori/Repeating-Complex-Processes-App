@@ -1,0 +1,26 @@
+[Unit]
+Description=Repeating Process App Gunicorn
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=<app-user>
+Group=<app-group>
+WorkingDirectory=/srv/repeating-process-app/current/backend
+EnvironmentFile=/etc/repeating-process-app/backend.env
+RuntimeDirectory=repeating-process-app
+RuntimeDirectoryMode=0755
+ExecStart=/srv/repeating-process-app/current/backend/.venv/bin/gunicorn core.wsgi:application --workers 3 --bind unix:/run/repeating-process-app/gunicorn.sock --access-logfile - --error-logfile -
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -14,7 +14,6 @@ import TemplateDetailView from '../views/TemplateDetailView.vue'
 import AccountSettingsView from '../views/AccountSettingsView.vue'
 import { useAuthStore } from '../stores/auth'
 import pinia from '../stores'
-import TemplatesView from '../views/TemplatesView.vue'
 import TemplateTasksView from '../views/TemplateTasksView.vue'
 import TemplateActivitiesView from '../views/TemplateActivitiesView.vue'
 import TagsView from '../views/TagsView.vue'
@@ -51,7 +50,7 @@ const router = createRouter({
       component: PasswordResetRequestView,
     },
     {
-      path: '/auth/password-reset/confirm',
+      path: '/auth/password-reset/confirm/:uid/:token',
       name: 'password-reset-confirm',
       component: PasswordResetConfirmView,
     },
@@ -106,7 +105,6 @@ const router = createRouter({
       name: 'template-create',
       component: TemplateCreateView,
       meta: { requiresAuth: true },
-
     },
     {
       path: '/templates/:id',

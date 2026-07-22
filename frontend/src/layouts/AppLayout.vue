@@ -5,16 +5,21 @@
    ============================================ -->
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { useNotificationStore } from '@/stores/notifications'
 import { useOnboardingStore } from '@/stores/onboarding'
 import LogoIcon from '@/components/ui/LogoIcon.vue'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseModal from '@/components/ui/BaseModal.vue'
 import OnboardingTour from '@/components/ui/OnboardingTour.vue'
 
 const authStore = useAuthStore()
 const { user } = storeToRefs(authStore)
+const notificationStore = useNotificationStore()
+const { shareNotifications, shareNotificationsOpen } = storeToRefs(notificationStore)
 const router = useRouter()
 const onboardingStore = useOnboardingStore()
 
@@ -30,6 +35,7 @@ function closeUserMenu() {
 
 async function logout() {
   await authStore.logoutCurrentSession()
+  notificationStore.reset()
   router.push({ name: 'login' })
 }
 
@@ -37,6 +43,21 @@ function openHelp() {
   closeUserMenu()
   onboardingStore.startTour('sidebar')
 }
+
+async function acknowledgeShareNotifications() {
+  await notificationStore.acknowledgeShareNotifications()
+}
+
+const notificationSummary = computed(() => {
+  if (shareNotifications.value.length === 1) {
+    return '1 new shared template'
+  }
+  return `${shareNotifications.value.length} new shared templates`
+})
+
+onMounted(() => {
+  notificationStore.loadShareNotifications()
+})
 
 const navItems = [
   {
@@ -173,6 +194,40 @@ const navItems = [
     <!-- ONBOARDING TOUR -->
     <OnboardingTour />
 
+    <BaseModal
+      v-model="shareNotificationsOpen"
+      title="Templates Shared With You"
+      size="lg"
+      confirm-label=""
+      @cancel="notificationStore.closeShareNotifications"
+    >
+      <div class="share-notification-modal">
+        <div class="share-notification-summary">{{ notificationSummary }}</div>
+        <div class="share-notification-list">
+          <div
+            v-for="notification in shareNotifications"
+            :key="notification.notification_id"
+            class="share-notification-item"
+          >
+            <div class="share-notification-badge">Shared</div>
+            <div class="share-notification-copy">
+              <div class="share-notification-title">
+                {{ notification.sender_username }} shared <strong>{{ notification.template_name }}</strong>
+              </div>
+              <div class="share-notification-meta">
+                {{ new Date(notification.created_at).toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' }) }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <BaseButton variant="primary" @click="acknowledgeShareNotifications">
+          Open my templates
+        </BaseButton>
+      </template>
+    </BaseModal>
+
   </div>
 </template>
 
@@ -260,6 +315,64 @@ const navItems = [
 }
 
 .nav-label { flex: 1; }
+
+.share-notification-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.share-notification-summary {
+  font-size: var(--font-label);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.share-notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.share-notification-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #F5F3FF 0%, #FFFFFF 100%);
+  border: 1px solid #DDD6FE;
+}
+
+.share-notification-badge {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--violet);
+  color: var(--white);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.share-notification-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.share-notification-title {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.share-notification-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 
 /* SIDEBAR FOOTER */
 .sidebar-footer {

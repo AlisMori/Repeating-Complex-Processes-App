@@ -15,6 +15,7 @@ import {
   getCycle, getCycleTasks, getCycleActivities,
   shutdownCycle,
   updateCycleTask, previewTaskShift, applyTaskShift,
+  updateTaskNotificationPreference,
   setTaskNote, clearTaskNote,
   updateCycleActivity, setActivityNote, clearActivityNote,
 } from '@/api/cycles'
@@ -54,6 +55,8 @@ const shiftLoading = ref(false)
 const shiftPreviewLoading = ref(false)
 
 const taskDetailModal = ref({ open: false, task: null, templateDetail: null, loading: false })
+const taskNotificationLoading = ref(false)
+const taskNotificationError = ref('')
 
 // One shared note editor for both tasks and activities.
 const noteModal = ref({ open: false, kind: null, id: null, text: '' })
@@ -481,9 +484,17 @@ async function saveNote() {
   noteLoading.value = true
   try {
     if (!text.trim()) {
-      kind === 'task' ? await clearTaskNote(id) : await clearActivityNote(id)
+      if (kind === 'task') {
+        await clearTaskNote(id)
+      } else {
+        await clearActivityNote(id)
+      }
     } else {
-      kind === 'task' ? await setTaskNote(id, text.trim()) : await setActivityNote(id, text.trim())
+      if (kind === 'task') {
+        await setTaskNote(id, text.trim())
+      } else {
+        await setActivityNote(id, text.trim())
+      }
     }
     noteModal.value.open = false
     await loadCycle()
@@ -569,6 +580,7 @@ function statusLabel(status) {
 }
 
 async function openTaskDetail(task) {
+  taskNotificationError.value = ''
   taskDetailModal.value = { open: true, task, templateDetail: null, loading: true }
   try {
     const { data } = await getTemplateTaskDetail(task.template_task)
@@ -579,6 +591,27 @@ async function openTaskDetail(task) {
     // CycleTask itself — just without the original description.
   } finally {
     taskDetailModal.value.loading = false
+  }
+}
+
+async function saveTaskNotificationPreference(notificationOptIn) {
+  const task = taskDetailModal.value.task
+  if (!task || taskNotificationLoading.value) return
+
+  taskNotificationLoading.value = true
+  taskNotificationError.value = ''
+  try {
+    const { data } = await updateTaskNotificationPreference(task.cycle_task_id, notificationOptIn)
+    const taskIndex = tasks.value.findIndex((item) => item.cycle_task_id === data.cycle_task_id)
+    if (taskIndex !== -1) {
+      tasks.value[taskIndex] = data
+    }
+    taskDetailModal.value.task = data
+    toast.success(notificationOptIn ? 'Task reminders enabled.' : 'Task reminders disabled.')
+  } catch (error) {
+    taskNotificationError.value = getErrorMessage(error, 'Failed to update task reminder preference.')
+  } finally {
+    taskNotificationLoading.value = false
   }
 }
 
@@ -1143,6 +1176,30 @@ onMounted(loadCycle)
           <span class="task-detail-label">Reminders</span>
           <span class="task-detail-value">{{ formatTaskReminders(taskDetailModal.task.reminder_lead_days) }}</span>
         </div>
+        <div class="task-detail-row">
+          <span class="task-detail-label">Task email notifications</span>
+          <div class="task-detail-actions">
+            <BaseButton
+              variant="secondary"
+              size="sm"
+              :loading="taskNotificationLoading"
+              :disabled="taskNotificationLoading || !taskDetailModal.task.notification_opt_in"
+              @click="saveTaskNotificationPreference(false)"
+            >
+              Disable
+            </BaseButton>
+            <BaseButton
+              variant="primary"
+              size="sm"
+              :loading="taskNotificationLoading"
+              :disabled="taskNotificationLoading || taskDetailModal.task.notification_opt_in"
+              @click="saveTaskNotificationPreference(true)"
+            >
+              Enable
+            </BaseButton>
+          </div>
+        </div>
+        <div v-if="taskNotificationError" class="task-detail-inline-error">{{ taskNotificationError }}</div>
         <div v-if="dependencyForTask(taskDetailModal.task)" class="task-detail-row">
           <span class="task-detail-label">Depends on</span>
           <span class="task-detail-value">{{ dependencyForTask(taskDetailModal.task).task_name }}</span>
@@ -1355,6 +1412,8 @@ onMounted(loadCycle)
 .task-detail-row:last-of-type { border-bottom: none; }
 .task-detail-label { font-size: var(--font-label); color: var(--text-secondary); }
 .task-detail-value { font-size: var(--font-label); font-weight: 500; color: var(--text-primary); }
+.task-detail-actions { display: flex; gap: 8px; }
+.task-detail-inline-error { font-size: var(--font-label); color: var(--danger); }
 .task-detail-block { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-light); }
 .task-detail-block-label { font-size: var(--font-hint); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
 .task-detail-block-text { font-size: var(--font-label); color: var(--text-secondary); line-height: 1.55; margin: 0; }

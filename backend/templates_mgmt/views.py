@@ -20,6 +20,7 @@ from cycles.dependency_engine import (
     DependencyConflict,
     revalidate_task_offsets,
 )
+from accounts.models import ShareNotification
 from cycles.services import generate_cycle_runtime_records, validate_activity_bounds
 from cycles.models import CycleInstance, TaskDependency
 from .scheduling import resolve_effective_offsets
@@ -425,6 +426,12 @@ class TemplateViewSet(viewsets.ModelViewSet):
             )
 
             deep_copy_template_contents(original_template, shared_template)
+            ShareNotification.objects.create(
+                recipient=target_user,
+                sender=request.user,
+                template=shared_template,
+                template_name=original_template.template_name,
+            )
 
         return Response(
             {
@@ -869,19 +876,23 @@ class TemplateCategoryViewSet(viewsets.ModelViewSet):
 
 class TemplateTaskTagViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateTaskTagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
 
     def get_queryset(self):
         return TemplateTaskTag.objects.filter(
-            template_task__template__user=self.request.user
-        )
+            template_task__template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).select_related("template_task__template", "tag").distinct()
 
 
 class TemplateActivityTagViewSet(viewsets.ModelViewSet):
     serializer_class = TemplateActivityTagSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsTemplateOwnerOrSharedAccess]
 
     def get_queryset(self):
         return TemplateActivityTag.objects.filter(
-            template_activity__template__user=self.request.user
-        )
+            template_activity__template_id__in=Template.objects.filter(
+                accessible_templates_q(self.request.user)
+            ).values("pk")
+        ).select_related("template_activity__template", "tag").distinct()

@@ -1,17 +1,20 @@
+import { fileURLToPath, URL } from 'node:url'
+
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import path from 'path'
 
 export default defineConfig({
   plugins: [vue()],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') }
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
   },
   test: {
     environment: 'jsdom',
     globals: true,
     // Vitest scans the whole project by default and picks up
-    // anything matching *.test.js / *.spec.js — including the
+    // anything matching *.test.js / *.spec.js, including the
     // existing src/api/axios.test.js and
     // src/services/activityTracker.test.js, which are written for
     // Node's native test runner (node:test), not Vitest. Vitest

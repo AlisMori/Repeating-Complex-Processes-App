@@ -11,17 +11,55 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
-load_dotenv()
-
-SECRET_KEY = os.getenv('SECRET_KEY')
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name, default=0):
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
+
+
+def env_list(name, default=None):
+    value = os.getenv(name)
+    if value is None:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+RUNNING_TESTS = "test" in sys.argv
+DEBUG = env_bool("DEBUG", default=True)
+DEFAULT_LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]", "testserver"]
+DEFAULT_LOCAL_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "dev-only-insecure-secret-key"
+    else:
+        raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is False.")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -32,23 +70,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = True
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv("ALLOWED_HOSTS", "").split(",")
-    if host.strip()
-]
+ALLOWED_HOSTS = env_list(
+    "ALLOWED_HOSTS",
+    default=DEFAULT_LOCAL_HOSTS if DEBUG else [],
+)
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured("ALLOWED_HOSTS must be set when DEBUG is False.")
 
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
-    if origin.strip()
-]
-CORS_ALLOWED_ORIGINS += [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-]
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    default=DEFAULT_LOCAL_ORIGINS if DEBUG else [],
+)
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=DEFAULT_LOCAL_ORIGINS if DEBUG else [],
+)
 
 CORS_ALLOW_CREDENTIALS = True
 # Application definition
@@ -81,6 +117,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/hour"),
+        "password_reset_confirm": os.getenv("PASSWORD_RESET_CONFIRM_THROTTLE_RATE", "10/hour"),
+    },
 }
 
 SIMPLE_JWT = {
@@ -169,19 +209,45 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"  # while development
+ENABLE_HTTPS_SECURITY = not DEBUG and not RUNNING_TESTS
+SECURE_SSL_REDIRECT = ENABLE_HTTPS_SECURITY and env_bool(
+    "SECURE_SSL_REDIRECT",
+    default=True,
+)
+SESSION_COOKIE_SECURE = ENABLE_HTTPS_SECURITY and env_bool(
+    "SESSION_COOKIE_SECURE",
+    default=True,
+)
+CSRF_COOKIE_SECURE = ENABLE_HTTPS_SECURITY and env_bool(
+    "CSRF_COOKIE_SECURE",
+    default=True,
+)
+SECURE_HSTS_SECONDS = (
+    env_int("SECURE_HSTS_SECONDS", default=0) if ENABLE_HTTPS_SECURITY else 0
+)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = (
+    SECURE_HSTS_SECONDS > 0
+    and env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+)
+SECURE_HSTS_PRELOAD = (
+    SECURE_HSTS_SECONDS > 0
+    and env_bool("SECURE_HSTS_PRELOAD", default=False)
+)
+if env_bool("USE_X_FORWARDED_PROTO", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# EMAIL_HOST = os.getenv("EMAIL_HOST")
-# EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
-# EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS") == "True"
-#
-# EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-# EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
 
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
+PASSWORD_RESET_TIMEOUT = 60 * 10
 
 
 # django-q2, background job runner (mark_overdue_tasks, Module 9).
@@ -201,4 +267,41 @@ Q_CLUSTER = {
     "queue_limit": 50,
     "bulk": 10,
     "orm": "default",
+}
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+
+# Logging settings
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+
+    "formatters": {
+        "standard": {
+            "format": (
+                "%(asctime)s | "
+                "%(levelname)s | "
+                "%(name)s | "
+                "%(message)s"
+            ),
+        },
+    },
+
+    "handlers": {
+        "email_file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": BASE_DIR / "logs" / "emails.log",
+            "formatter": "standard",
+        },
+    },
+
+    "loggers": {
+        "emails": {
+            "handlers": ["email_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
 }

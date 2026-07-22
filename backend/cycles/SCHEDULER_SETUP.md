@@ -1,8 +1,15 @@
-# Scheduler setup: mark_overdue_tasks
+# Scheduler setup: django-q2 background jobs
 
-This covers turning on the overdue-check background job (Design Doc 4.2.17,
-Module 9). Everything below the code is already done, this file is only
-about the last step, getting a worker to actually run it.
+This covers turning on the background jobs that depend on django-q2. Right
+now that means:
+
+- `cycles.task_status_engine.run_scheduled_maintenance`, which runs daily
+  for task activation and overdue state updates.
+- `notifications.tasks.check_notifications`, which runs every 5 minutes for
+  reminders and overdue emails.
+
+Everything below the code is already done, this file is only about the last
+step, getting a worker to actually run them.
 
 ## Local testing (before production)
 
@@ -15,6 +22,7 @@ can corrupt anything.
 **Terminal 2**, once, then start the worker:
 ```
 python manage.py setup_scheduled_jobs
+python manage.py setup_notification_schedule
 python manage.py qcluster
 ```
 Leave that terminal open while doing manual/frontend testing. When done,
@@ -52,6 +60,11 @@ Should show at least 1 once `qcluster` has been running a moment.
 - `python manage.py mark_overdue_tasks` runs it once by hand, any time.
 - `python manage.py setup_scheduled_jobs` registers it with django-q2's
   scheduler to repeat daily. Safe to run more than once.
+- `notifications.tasks.check_notifications()` is the notification scan,
+  fully tested in `notifications/tests.py`, and persists delivery state so
+  five-minute scans do not duplicate emails.
+- `python manage.py setup_notification_schedule` registers the notification
+  schedule to repeat every 5 minutes. Safe to run more than once.
 
 ## What's still missing, and why it's not code
 
@@ -66,8 +79,11 @@ to work on both Linux and Windows.
 
 1. Run migrations if not already done, django-q2's own tables come from
    its app migrations, already in `INSTALLED_APPS`.
-2. Run once: `python manage.py setup_scheduled_jobs`
-3. Get `python manage.py qcluster` running continuously. Pick based on
+2. Run once:
+   `python manage.py setup_scheduled_jobs`
+3. Run once:
+   `python manage.py setup_notification_schedule`
+4. Get `python manage.py qcluster` running continuously. Pick based on
    the actual server:
 
    **Linux (systemd)**: create a unit file, e.g.
@@ -93,7 +109,7 @@ to work on both Linux and Windows.
    failure), or inside whatever container/process manager the Windows
    host already uses for the main app.
 
-4. Confirm it's actually running: check `django_q.models.Success` /
+5. Confirm it's actually running: check `django_q.models.Success` /
    `Failure` in the admin, or `python manage.py qmonitor` if the monitor
    dependency is installed.
 
@@ -103,5 +119,13 @@ to work on both Linux and Windows.
 python manage.py shell -c "from django_q.models import Schedule; print(Schedule.objects.filter(func='cycles.task_status_engine.mark_overdue_tasks').exists())"
 ```
 Should print `True` after step 2. Actual execution only happens once a
-qcluster worker (step 3) is running, the schedule existing is not the
+qcluster worker (step 4) is running, the schedule existing is not the
 same as it firing.
+
+For notifications:
+```
+python manage.py shell -c "from django_q.models import Schedule; s=Schedule.objects.get(func='notifications.tasks.check_notifications'); print((s.schedule_type, s.minutes, s.repeats))"
+```
+Should print something equivalent to `('I', 5, -1)` after step 3. Actual
+email delivery still requires the `qcluster` worker from step 4 to be
+running continuously.

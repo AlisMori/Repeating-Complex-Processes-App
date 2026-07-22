@@ -26,7 +26,6 @@ const router = useRouter()
 
 const isEditMode = computed(() => !!route.params.id)
 const templateId = computed(() => route.params.id || null)
-const pageTitle = computed(() => isEditMode.value ? 'Edit Template' : 'New Template')
 
 // ── STEP TRACKING ─────────────────────────────────────────
 const step = ref(1)
@@ -155,7 +154,7 @@ async function loadExistingTemplate() {
       }
     }
     dependencies.value = seededDependencies
-  } catch (e) {
+  } catch {
     step1Error.value = 'Failed to load template data.'
   } finally {
     loadingInitial.value = false
@@ -571,7 +570,7 @@ function buildGantt(taskList, actList, depByLocalId = {}) {
 
   // Topological-ish sort for display — independent tasks first,
   // then tasks that depend on them, so the timeline reads top-down.
-  const sorted = [...taskList.map((t, i) => ({ ...t, _origIdx: i }))]
+  const sorted = taskList.map((t, i) => ({ ...t, _origIdx: i }))
   sorted.sort((a, b) => {
     const aHasDep = edges[a._origIdx] !== undefined
     const bHasDep = edges[b._origIdx] !== undefined

@@ -198,6 +198,31 @@ class AccountsErrorHandlingTests(BaseAPITestCase):
         response = self.client.patch(url, {"notification_opt_in": "not-a-boolean"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_change_password_with_wrong_current_password_returns_400(self):
+        url = reverse("auth-change-password")
+        self.auth_as_owner()
+        response = self.client.post(
+            url,
+            {
+                "current_password": "wrong-pass",
+                "new_password": "AnotherStr0ngPass!",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("current_password", response.data)
+
+    def test_delete_account_with_wrong_confirmation_text_returns_400(self):
+        url = reverse("auth-delete-account")
+        self.auth_as_owner()
+        response = self.client.post(
+            url,
+            {
+                "confirmation_text": "confirm",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("confirmation_text", response.data)
+
     def test_password_reset_request_with_invalid_email_returns_400(self):
         url = reverse("auth-password-reset")
         response = self.client.post(url, {"email": "not-an-email"})
@@ -547,6 +572,17 @@ class CyclesErrorHandlingTests(BaseAPITestCase):
         response = self.client.post(url, {"note_text": "   "})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("note_text", response.data)
+
+    def test_task_notification_preference_rejects_non_boolean_with_400(self):
+        template = self.make_template(self.owner)
+        cycle = self.make_cycle(self.owner, template=template)
+        task = self.make_cycle_task(cycle)
+
+        self.auth_as_owner()
+        url = reverse("cycle-tasks-notification-preference", args=[task.pk])
+        response = self.client.post(url, {"notification_opt_in": "nope"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("notification_opt_in", response.data)
 
     def test_activity_resize_that_orphans_a_task_returns_400(self):
         template = self.make_template(self.owner)

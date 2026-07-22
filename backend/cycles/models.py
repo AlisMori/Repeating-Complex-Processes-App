@@ -69,6 +69,7 @@ class CycleTask(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     is_mandatory = models.BooleanField(default=True)
     is_fixed_date = models.BooleanField(default=False)
+    notification_opt_in = models.BooleanField(default=True)
     reminder_lead_days = ArrayField(
         models.PositiveIntegerField(),
         blank=True,

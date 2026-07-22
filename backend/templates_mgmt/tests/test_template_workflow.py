@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from accounts.models import ShareNotification
 from templates_mgmt.models import Template, TemplateTask, TemplateActivity, UserTemplate
 
 User = get_user_model()
@@ -139,4 +140,13 @@ class TemplateWorkflowTests(APITestCase):
         )
         self.assertTrue(
             TemplateActivity.objects.filter(template_id=shared_template_id).exists()
+        )
+        self.assertTrue(
+            ShareNotification.objects.filter(
+                recipient=self.recipient,
+                sender=self.user,
+                template_id=shared_template_id,
+                template_name="Workflow Template Version 2",
+                is_read=False,
+            ).exists()
         )
